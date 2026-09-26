@@ -86,10 +86,9 @@ A report is most useful with all four of these:
 Sanitise before pasting: `.ww/` and command output may contain credentials or
 other private values. See [Sensitive runtime data](#sensitive-runtime-data) below.
 
-Two things to read before you rely on it:
-[Compatibility is not guaranteed yet](#compatibility-is-not-guaranteed-yet),
-because nothing is promised to survive a pull of `main` while the design is
-still settling, and
+Two things worth reading before you rely on it:
+[Stability and compatibility](#stability-and-compatibility), for what is
+settled and what is not, and
 [documentation/limitations.md](documentation/limitations.md), which lists what
 ww deliberately does not do yet so you can tell a limitation from a bug.
 
@@ -323,11 +322,12 @@ To update, pull `main` in your clone:
 git -C ~/tools/agentic-workflows pull
 ```
 
-Because the install is editable, that is the whole upgrade — and frequent
-updates on `main` mean behaviour really can change between two pulls. Read
-[CHANGELOG.md](CHANGELOG.md) when you do, and see
-[Compatibility is not guaranteed yet](#compatibility-is-not-guaranteed-yet)
-for what that can break and how to avoid it.
+Because the install is editable, that is the whole upgrade. Updates land
+often, though mostly as new capabilities and fixes rather than changes to
+workflows you have already written — see
+[Stability and compatibility](#stability-and-compatibility) for what is
+settled. Skim [CHANGELOG.md](CHANGELOG.md) when you pull, and finish or
+`reset` any task that is mid-flight first.
 
 You do not have to remember to look. ww compares its own checkout against the
 branch it tracks, at most once a day, and prints a short notice above the
@@ -345,35 +345,41 @@ and each notice appears once:
 Set `"update_check": false` in `agentic-workflows.json` to switch it off for a
 project, or `WW_UPDATE_CHECK=0` to switch it off everywhere.
 
-## Compatibility is not guaranteed yet
+## Stability and compatibility
 
-**While ww is under active development and has no stable version, nothing
-about it is promised to stay the same between two pulls of `main`.** There is
-no deprecation period: a thing can change in the pull that changes it. This
-applies to all of the following.
+The shape of ww has largely settled. `workflows.yaml` and the command surface
+have been stable in practice for a while, and most work on `main` now is
+internal refactoring, new capabilities, and fixes rather than changes to what
+you have already written. Frequent updates do not mean frequent breakage.
 
-| Surface | What can change |
+What there is not, yet, is a *formal* guarantee: no versions to pin, no
+deprecation cycle, and no promise that an incompatible change could not land.
+When one does, it is deliberate, it is called out in
+[CHANGELOG.md](CHANGELOG.md), and it is rare — `save_metadata` becoming
+`update_metadata` is the kind of thing, and the sort of change that happens
+occasionally rather than routinely.
+
+| Surface | Where it stands |
 | --- | --- |
-| `workflows.yaml` | Keys can be renamed, replaced, or removed, and a file that lints today may be rejected tomorrow. `save_metadata` already became `update_metadata`. |
-| The CLI | Commands, flags, and printed output are not a stable interface. Do not parse them in scripts you rely on. |
-| Task state under `.ww/` | The on-disk format carries a version and the reader rejects any other one. After an upgrade, an unfinished task may simply not load. |
-| The extension API | Documented and the most stable of these, but still able to change before 1.0. |
+| `workflows.yaml` | Settled. Keys are added far more often than they change, and `lint` tells you immediately if something no longer parses. |
+| The CLI | Settled for interactive use. Commands, flags, and printed text are still not a machine interface — use `--json` if a script depends on output. |
+| Task state under `.ww/` | The volatile one. The on-disk format is versioned and the reader rejects any other version, so an unfinished task may not load after an upgrade. |
+| The extension API | Documented and the most deliberate of these; changes are announced. |
 
-What this means in practice:
+Two habits cover almost everything:
 
-- **Finish or `reset` in-flight tasks before you pull.** That is the failure
-  people actually hit — a task started last week refusing to load this week.
-- **Read [CHANGELOG.md](CHANGELOG.md) when you pull.** ww also tells you when
-  your checkout is behind and shows you the entries you would be pulling in.
-- **If you need stability right now, pin to a commit** and upgrade
-  deliberately: `git -C ~/tools/agentic-workflows checkout <sha>`.
+- **Finish or `reset` in-flight tasks before you pull.** This is the one that
+  actually bites people — a task started last week refusing to load this week.
+  Completed tasks are unaffected.
+- **Skim [CHANGELOG.md](CHANGELOG.md) when you update.** ww tells you when
+  your checkout is behind and shows the entries you would be pulling in, so
+  this costs you nothing.
 
-None of this is carelessness — it is the trade for shipping changes quickly
-while the design settles. When ww reaches a stable version it will be
-distributed as an ordinary Python package with the usual guarantees, and this
-section goes away. [documentation/limitations.md](documentation/limitations.md)
-has the full detail, alongside the execution model and the workflow shapes ww
-does not support.
+If you want a fixed target anyway, pin to a commit and move deliberately:
+`git -C ~/tools/agentic-workflows checkout <sha>`. Once ww reaches a stable
+release it will be an ordinary Python package with the usual guarantees.
+[documentation/limitations.md](documentation/limitations.md) has the detail,
+alongside the execution model and the workflow shapes ww does not support.
 
 ## Supported platforms
 

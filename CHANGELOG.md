@@ -53,6 +53,13 @@ is in [documentation/limitations.md](documentation/limitations.md).
   name — creating a directory called `y` and recording it in the project
   configuration. "You're almost there!" is now "Next steps", one line after
   ww reports that setup completed.
+- The compatibility wording is recalibrated to match reality. `workflows.yaml`
+  and the command surface have settled, and most work on `main` is internal
+  refactoring, new capabilities, and fixes — so the README says that, rather
+  than warning that nothing survives a pull. What remains true is stated
+  plainly: no formal guarantee until releases exist, incompatible changes
+  deliberate and rare when they happen, and persisted task state the one
+  genuinely volatile surface.
 - `SECURITY.md` states what ww can do on the machine running it: that
   `workflows.yaml` is executable configuration, that the only request ww makes
   of its own accord is the update check's `git fetch`, that extensions run

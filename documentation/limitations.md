@@ -19,12 +19,16 @@ installed from a checkout in editable mode, and `main` moves frequently; see
 the install section of [README.md](../README.md) for what that means in
 practice.
 
-**Today there is no compatibility guarantee at all.** With no releases to
-define a boundary, nothing — `workflows.yaml` keys, command-line surface,
-printed output, persisted task state, or the extension API — is promised to
-survive a pull of `main`, and there is no deprecation period before a change
-lands. The trade is deliberate: the design is still settling, and freezing
-surfaces now would freeze mistakes with them.
+**There is no formal compatibility guarantee yet**, because there are no
+releases to define one against: nothing is contractually promised to survive a
+pull of `main`, and there is no deprecation period before a change lands.
+
+In practice the surfaces have settled. `workflows.yaml` and the command line
+have been stable for a while, and most work now is internal refactoring, new
+capabilities, and fixes. Incompatible changes are possible but uncommon; when
+one lands it is deliberate and called out in the changelog. The exception is
+persisted task state, which is versioned and strictly rejected across formats
+— finish or reset a task before upgrading rather than expecting it to load.
 
 Once releases exist, the policy becomes the usual one. The package version
 will identify a release rather than promising that every internal
