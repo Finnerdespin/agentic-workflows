@@ -58,10 +58,16 @@ representative at an online or offline event.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-<CONDUCT-CONTACT-EMAIL>.
-All complaints will be reviewed and investigated promptly and fairly.
+This project has no private contact address. Every space it occupies is on
+GitHub, so instances of abusive, harassing, or otherwise unacceptable behavior
+should be reported to GitHub through
+[report abuse](https://github.com/contact/report-abuse), which reaches people
+who can act on the account behind the behavior. Reports are reviewed by GitHub
+under its own policies.
+
+Anything the maintainers can act on themselves — moderating a comment, closing
+a thread, blocking an account from this repository — they will, once it is
+brought to their attention.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.
