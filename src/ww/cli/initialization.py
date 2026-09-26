@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -19,7 +20,13 @@ from ww.output_adapters.terminal import initialization_progress
 from ww.results import InitializationResult
 from ww.storage import Storage
 
-from .prompts import _ask_choice, _ask_yes_no
+from .prompts import (
+    _ask_checklist,
+    _ask_choice,
+    _ask_names,
+    _ask_yes_no,
+    _interactive_terminal,
+)
 
 
 def _init_choices(storage: Storage) -> dict[str, object]:
@@ -141,11 +148,8 @@ def _initialization_options(
             else args.worktree_dir
         )
         if worktrees and directory is None and interactive:
-            directory = (
-                input(
-                    _init_prompt(25, "Worktree directory (./git-worktrees): ")
-                ).strip()
-                or None
+            directory = _ask_directory(
+                _init_prompt(25, "Worktree directory (./git-worktrees): ")
             )
         directory = directory or "./git-worktrees"
         formats = {"default": "feature/{{task_id}}"}
@@ -207,6 +211,17 @@ def _initialization_options(
         elif isinstance(linked, bool):
             args.link_instructions = linked
     if args.link_instructions is None and interactive:
+        print(
+            "\nWW_AGENT_INSTRUCTIONS.md tells your agents how to work through ww:\n"
+            "to start from `./ww discover`, follow each response, and keep going\n"
+            "until the workflow is done. Referencing it from the instruction files\n"
+            "your agents already read (AGENTS.md, and CLAUDE.md or GEMINI.md where\n"
+            "those agents are set up) means they pick it up on their own, so you\n"
+            "can just ask for the work instead of explaining ww every session.\n"
+            "\n"
+            "Answer no to keep those files untouched; you can add the one-line\n"
+            "reference yourself later, or name ww in the request when you want it.\n"
+        )
         args.link_instructions = _ask_yes_no(
             _init_prompt(
                 50, "Add @WW_AGENT_INSTRUCTIONS.md to agent instruction files? [Y/n]: "
@@ -257,7 +272,8 @@ def _skill_paths(
     choices = dict(saved) if isinstance(saved, dict) else {}
     paths: list[str] = []
     directories = _known_agent_directories()
-    for index, directory in enumerate(directories):
+    undecided: list[tuple[str, bool]] = []
+    for directory in directories:
         location = _skill_location(directory)
         exists = (storage.root / directory).is_dir()
         installed = (storage.root / location).exists()
@@ -267,23 +283,109 @@ def _skill_paths(
         elif installed or (requested and exists):
             selected = True
         elif not isinstance(selected, bool) and interactive:
-            question = (
-                f"Install the ww skill into {location}? [Y/n]: "
-                if exists
-                else f"Create {directory} and install the ww skill? [y/N]: "
-            )
-            selected = _ask_yes_no(
-                _init_prompt(55 + index * 35 // max(1, len(directories) - 1), question)
-                if progress
-                else question,
-                exists,
-            )
+            # Every open question is settled in one place below, so the
+            # operator answers a single screen instead of one prompt per agent.
+            undecided.append((directory, exists))
+            selected = None
         if isinstance(selected, bool):
             choices[directory] = selected
             _save_init_choice(storage, "agents", choices)
         if selected is True:
             paths.append(location)
+    if undecided:
+        chosen = _choose_agent_directories(undecided, progress)
+        for directory, _ in undecided:
+            choices[directory] = directory in chosen
+            if directory in chosen:
+                paths.append(_skill_location(directory))
+        _save_init_choice(storage, "agents", choices)
     return tuple(paths)
+
+
+def _choose_agent_directories(
+    undecided: list[tuple[str, bool]], progress: bool
+) -> set[str]:
+    """Settle every open agent-directory question, in one screen where we can.
+
+    A terminal we can redraw gets a checklist. A pipe, a dumb terminal, or a
+    captured stdin gets plain questions instead: one for each directory that
+    already exists, and one shared question for the agents without one.
+    """
+    if _interactive_terminal():
+        return set(
+            _ask_checklist(
+                "\nInstall the ww skill into which agent directories?",
+                tuple(
+                    (directory, "already present" if exists else "", exists)
+                    for directory, exists in undecided
+                ),
+            )
+        )
+    chosen = {
+        directory
+        for directory, exists in undecided
+        if exists
+        and _ask_yes_no(
+            _progress(
+                progress,
+                55,
+                f"Install the ww skill into {_skill_location(directory)}? [Y/n]: ",
+            ),
+            True,
+        )
+    }
+    absent = [directory for directory, exists in undecided if not exists]
+    if absent:
+        print("\nNo directory exists yet for these agents. ww can create one and")
+        print("install its skill, so you can ask the agent to work through ww:")
+        for row in _columns(absent, shutil.get_terminal_size((80, 24))[0] - 2):
+            print("  " + row)
+        print()
+        chosen.update(
+            _ask_names(
+                _progress(progress, 90, "Create which? (comma-separated, or none): "),
+                tuple(absent),
+            )
+        )
+    return chosen
+
+
+def _ask_directory(prompt: str) -> str | None:
+    """Read a directory path, refusing an answer to the previous question.
+
+    This prompt follows a ``[y/N]`` one, and a stray ``y`` used to be accepted
+    as the directory's name: ww then created a directory called ``y`` and
+    recorded it in the project configuration without complaint.
+    """
+    while True:
+        value = input(prompt).strip()
+        if not value:
+            return None
+        if value.lower() in {"y", "yes", "n", "no"}:
+            print("That looks like an answer to the previous question.")
+            print("Enter a directory path, or press Enter for ./git-worktrees.")
+            continue
+        return value
+
+
+def _columns(names: list[str], width: int) -> list[str]:
+    """Lay the names out in rows that fit, so a narrow terminal stays readable."""
+    rows: list[str] = []
+    row = ""
+    for name in names:
+        candidate = f"{row}  {name}" if row else name
+        if row and len(candidate) > width:
+            rows.append(row)
+            row = name
+        else:
+            row = candidate
+    if row:
+        rows.append(row)
+    return rows
+
+
+def _progress(progress: bool, percent: int, question: str) -> str:
+    return _init_prompt(percent, question) if progress else question
 
 
 def _configured_task_format(storage: Storage) -> bool:

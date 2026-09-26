@@ -243,7 +243,7 @@ def test_init_without_skills_suggests_installing_them(
 def test_init_asks_before_installing_each_skill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ww.cli.initialization import _known_agent_directories, _skill_paths
+    from ww.cli.initialization import _skill_paths
 
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".cursor").mkdir()
@@ -253,18 +253,62 @@ def test_init_asks_before_installing_each_skill(
         # Answer by what is being asked, not by position: the order and the
         # number of agent directories both change as integrations are added.
         prompts.append(prompt)
-        return "" if ".claude/skills" in prompt else "n"
+        if ".claude/skills" in prompt:
+            return ""  # accept the default, which is yes for a directory here
+        if "Create which?" in prompt:
+            return "none"
+        return "n"
 
     monkeypatch.setattr("builtins.input", answer)
 
     paths = _skill_paths(Storage(tmp_path), None, interactive=True)
 
     assert paths == (".claude/skills/ww/SKILL.md",)
+    # A directory that exists is asked about on its own...
     assert "Install the ww skill into .claude/skills/ww/SKILL.md? [Y/n]: " in prompts
     assert "Install the ww skill into .cursor/skills/ww/SKILL.md? [Y/n]: " in prompts
-    assert "Create .codex and install the ww skill? [y/N]: " in prompts
-    assert len(prompts) == len(_known_agent_directories())
+    # ...and every agent without one shares a single question.
+    assert "Create which? (comma-separated, or none): " in prompts
+    assert len(prompts) == 3
     assert _skill_paths(Storage(tmp_path), False, interactive=True) == ()
+
+
+def test_init_offers_the_absent_agent_directories_in_one_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ww.cli.initialization import _known_agent_directories, _skill_paths
+
+    prompts: list[str] = []
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return ".codex, .claude"
+
+    monkeypatch.setattr("builtins.input", answer)
+
+    paths = _skill_paths(Storage(tmp_path), None, interactive=True)
+
+    # One question, not one per agent ww knows about.
+    assert len(prompts) == 1
+    assert len(_known_agent_directories()) > 1
+    assert paths == (".codex/skills/ww/SKILL.md", ".claude/skills/ww/SKILL.md")
+
+
+def test_declining_every_agent_directory_takes_one_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ww.cli.initialization import _skill_paths
+
+    prompts: list[str] = []
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return "n"
+
+    monkeypatch.setattr("builtins.input", answer)
+
+    assert _skill_paths(Storage(tmp_path), None, interactive=True) == ()
+    assert len(prompts) == 1
 
 
 def test_discover_tells_agents_to_use_the_ticket_key(

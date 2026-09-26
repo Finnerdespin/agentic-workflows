@@ -16,17 +16,13 @@ def _git(*arguments: str, cwd: Path) -> None:
 
 
 def _agent_answers(*approve: str) -> str:
-    """One answer per agent-skill prompt, in the order ``init`` asks them.
+    """The answer to init's agent-skill question, for a project with none.
 
-    Taken from the implementation's own directory list so that adding an
-    agent integration does not leave these tests answering the wrong prompt.
+    Directories that already exist are asked about one at a time; every other
+    agent is offered in a single comma-separated question. These projects
+    start empty, so one answer covers them all however many agents ww knows.
     """
-    from ww.cli.initialization import _known_agent_directories
-
-    return "".join(
-        f"{'y' if directory in approve else 'n'}\n"
-        for directory in _known_agent_directories()
-    )
+    return (",".join(approve) if approve else "none") + "\n"
 
 
 def _complete_init(root: Path, task_id: str, capsys) -> None:  # type: ignore[no-untyped-def]

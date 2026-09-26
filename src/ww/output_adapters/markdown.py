@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import shutil
+import textwrap
 from pathlib import Path
 
 from ww.agents import WAIT_VARIABLE, wait_mechanism
@@ -121,7 +122,8 @@ class MarkdownOutputAdapter(OutputAdapter):
         lines.extend(
             [
                 "",
-                terminal_accent("You're almost there!"),
+                *_permission_notice(),
+                terminal_accent("Next steps"),
                 "",
                 "  " + terminal_accent("1. Create your first workflow"),
                 "     Define the steps in workflows.yaml.",
@@ -135,14 +137,6 @@ class MarkdownOutputAdapter(OutputAdapter):
                 "     Use the project launcher for any ww command:",
                 "",
                 "     ./ww workflows",
-                "",
-                "  " + terminal_accent("Permission tip"),
-                "     To avoid repeated confirmation prompts, allow the ww command",
-                "     you use in your agent's permissions:",
-                "",
-                "     ww-agentic-workflows",
-                "     ww                 (when the shortcut exists)",
-                "     ./ww",
                 "",
                 *_initialization_shortcut(),
                 terminal_accent("Documentation"),
@@ -172,6 +166,56 @@ def _git_extension_active(root: str) -> bool:
         )
     except (OSError, json.JSONDecodeError, AttributeError):
         return False
+
+
+def _permission_notice() -> Lines:
+    """The one setup step that fails loudly later if it is skipped.
+
+    Left as a trailing "tip" it was routinely missed, and the symptoms arrive
+    much later looking unrelated: a confirmation prompt on every ww command,
+    and an interactive step whose operator page cannot open a local port at
+    all. It gets a boxed heading of its own, above the next steps, for that
+    reason, and wraps to the terminal so the box never breaks.
+    """
+    width = max(44, min(72, shutil.get_terminal_size((80, 24))[0]))
+    heading = "ACTION NEEDED — allow ww in your agent's permissions"
+    rule = "─" * (width - 2)
+    paragraphs = (
+        "ww runs the commands your workflows.yaml configures — your tests, "
+        "linters, and commits — so an agent treats it as a command needing "
+        "confirmation and asks every single time. Allow it once:",
+        "Without this you get a prompt per step, and an interactive step's "
+        "operator page cannot open its local port from inside an agent "
+        "sandbox — it fails with a permission error rather than a busy port.",
+        "What you are trusting is your own workflows.yaml: review changes to "
+        "it like a CI config, since whoever edits it can run commands here.",
+    )
+    body = textwrap.wrap(paragraphs[0], width - 2, initial_indent="  ",
+                         subsequent_indent="  ")
+    lines: Lines = [
+        terminal_accent(f"┌{rule}┐"),
+        *(
+            # Padded before it is coloured, so the escape codes never count
+            # toward the width and the right edge always lines up.
+            terminal_accent(f"│ {row.ljust(width - 4)} │")
+            for row in textwrap.wrap(heading, width - 4)
+        ),
+        terminal_accent(f"└{rule}┘"),
+        "",
+        *body,
+        "",
+        "     ww-agentic-workflows",
+        "     ww   (when the shortcut exists)",
+        "     ./ww",
+        "",
+    ]
+    for paragraph in paragraphs[1:]:
+        lines.extend(
+            textwrap.wrap(paragraph, width - 2, initial_indent="  ",
+                          subsequent_indent="  ")
+        )
+        lines.append("")
+    return lines
 
 
 def _initialization_shortcut() -> Lines:

@@ -9,12 +9,14 @@
     --bg: #f6f7f9; --panel: #ffffff; --ink: #1c1f24; --muted: #6b7280;
     --line: #e3e6ea; --accent: #2563eb; --accent-ink: #ffffff;
     --open: #fff7d6; --answered: #e8f0ff; --processed: #e8f5ec; --danger: #b91c1c;
+    --warn-bg: #fdf8e8; --warn-line: #e6d18a; --warn-ink: #6b5200; --warn-mark: #d4a017;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #14161a; --panel: #1e2126; --ink: #e6e8eb; --muted: #9aa3ad;
       --line: #30353c; --accent: #3b82f6; --accent-ink: #ffffff;
       --open: #3a3410; --answered: #1e2a4a; --processed: #163120; --danger: #f87171;
+      --warn-bg: #2b2513; --warn-line: #5c4c1c; --warn-ink: #e8d9a8; --warn-mark: #d4a017;
     }
   }
   * { box-sizing: border-box; }
@@ -39,6 +41,12 @@
   .answered .badge { background: var(--answered); }
   .processed .badge { background: var(--processed); }
   .badge.unsent { background: var(--danger); color: #fff; }
+  .experimental { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+                  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--warn-mark);
+                  color: var(--warn-ink); background: var(--warn-bg); white-space: nowrap; }
+  #experimental-note { margin: 0 0 14px; padding: 10px 12px; font-size: 13px;
+                       border: 1px solid var(--warn-line); border-left: 4px solid var(--warn-mark);
+                       border-radius: 6px; background: var(--warn-bg); color: var(--warn-ink); }
   .text { white-space: pre-wrap; margin: 0 0 8px; }
   dl { margin: 0 0 8px; font-size: 13px; }
   dl dt { color: var(--muted); }
@@ -68,11 +76,20 @@
 <body>
 <header>
   <h1 id="title">ww</h1>
+  <span class="experimental" title="The operator page is still taking shape; its behaviour may change.">experimental</span>
   <span class="muted" id="progress"></span>
   <button type="button" id="pause">I'm done for now</button>
   <span id="status" class="off">connecting…</span>
 </header>
 <main>
+  <p id="experimental-note">
+    The operator page is <strong>experimental</strong>. It works, but its
+    layout, keyboard behaviour, and the way answers are applied may change
+    between updates. Your answers are recorded by ww as you give them, so
+    nothing is lost if you close this tab — but if the page misbehaves, you
+    can always answer through <code>ww interact</code> in the terminal
+    instead.
+  </p>
   <p id="note"></p>
   <div id="items"></div>
 </main>

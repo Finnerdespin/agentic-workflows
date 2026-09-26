@@ -1821,6 +1821,33 @@ ww-agentic-workflows cleanup
 ww-agentic-workflows reset TASK-123 --yes
 ```
 
+## Installing the ww skill during init
+
+`init` offers the ww skill to every agent integration it knows about. In a
+terminal it can redraw, that is one checklist rather than one question per
+agent:
+
+```text
+Install the ww skill into which agent directories?
+  ↑↓ move · space toggles · a all · enter confirms
+
+ > [ ] .agents
+   [ ] .codex
+   [x] .claude       already present
+   [ ] .gemini
+```
+
+Directories that already exist start ticked, because having one is good
+evidence you use that agent. Nothing is written until you press enter, and
+the answers are remembered in `.ww/init-choices.json`, so a later `init` only
+asks about agents you have not decided on.
+
+Where the terminal cannot be driven that way — a pipe, `TERM=dumb`, a captured
+stdin in a test — ww falls back to plain questions: one for each directory that
+already exists, then a single comma-separated question for the agents without
+one. `--skills` and `--no-skills` skip the interaction entirely, and
+`--no-input` takes the defaults.
+
 ## Choosing a runtime
 
 `single` is the default, and an agent reading `discover` used to be told

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 
 from ww.actions import InstructionContent, InstructionContext, PlannedAction, actions
 from ww.instructions import Instruction
@@ -51,10 +52,25 @@ def render_initialization(result: InitializationResult, json_output: bool) -> st
     return _adapter_for(json_output).render_initialization(result)
 
 
-def render_initialization_welcome(json_output: bool) -> str:
+# The wordmark is 101 columns wide. Below that a terminal wraps every row of
+# it into unreadable halves, so a narrow one gets a compact mark instead.
+WORDMARK_COLUMNS = 101
+COMPACT_WELCOME = (
+    "  ██  ██   ██  ██\n"
+    "  ██  ██   ██  ██   ww · agentic workflows\n"
+    "  ░█████░ ░█████░\n"
+)
+
+
+def render_initialization_welcome(
+    json_output: bool, columns: int | None = None
+) -> str:
     """Render the interactive init welcome before collecting project choices."""
     if json_output:
         return ""
+    width = columns if columns is not None else shutil.get_terminal_size((80, 24))[0]
+    if width < WORDMARK_COLUMNS:
+        return COMPACT_WELCOME
     return (
         "░░░░█ ░░░░░ ░░░░░\n"
         "░░░█░ ░░░░░ ░░░░░\n"

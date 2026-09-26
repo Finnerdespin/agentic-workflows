@@ -11,6 +11,36 @@ is in [documentation/limitations.md](documentation/limitations.md).
 
 ## 2026-09-26
 
+- `init` explains what `WW_AGENT_INSTRUCTIONS.md` is before asking whether to
+  reference it, the way the task-ID question already described its options:
+  that it tells agents to start from `./ww discover` and follow each response,
+  that linking it from `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` means they pick
+  it up without being told, and what answering no leaves you with.
+- The operator page is marked experimental, in a badge beside its title and
+  a note above the items, so nobody mistakes a page whose layout and answer
+  handling may still change for a settled one.
+- `init`'s permission tip is now a boxed `ACTION NEEDED` block above the next
+  steps, and says why: ww runs the commands `workflows.yaml` configures, so an
+  agent asks for confirmation every time until it is allowed — and an
+  interactive step's operator page cannot open its local port from inside an
+  agent sandbox at all. It also names what is actually being trusted, which is
+  your own `workflows.yaml`. The block wraps to the terminal so the box never
+  breaks.
+- `init` asks far less and fits a normal terminal. Every agent directory is
+  now settled on one checklist — arrow keys move, space toggles, `a` marks all,
+  enter confirms — with the directories you already have ticked and labelled
+  `already present`. That replaces nine near-identical yes/no questions, so a
+  fresh Git project answers four prompts and one screen rather than fifteen
+  prompts. A terminal that cannot be redrawn, such as a pipe or a captured
+  stdin, still gets plain questions: one per existing directory and one shared
+  question for the rest. No new dependency; ww still installs `PyYAML` alone.
+  The welcome
+  wordmark is 101 columns wide and used to shred itself on an 80-column
+  terminal, so a narrower one gets a compact mark. The worktree directory
+  prompt refuses a bare `y`/`n`, which it previously accepted as a directory
+  name — creating a directory called `y` and recording it in the project
+  configuration. "You're almost there!" is now "Next steps", one line after
+  ww reports that setup completed.
 - `SECURITY.md` states what ww can do on the machine running it: that
   `workflows.yaml` is executable configuration, that the only request ww makes
   of its own accord is the update check's `git fetch`, that extensions run
