@@ -57,8 +57,9 @@ is in [documentation/limitations.md](documentation/limitations.md).
   `workflows.yaml` is executable configuration, that the only request ww makes
   of its own accord is the update check's `git fetch`, that extensions run
   arbitrary code, and what `.ww/` can contain. CI now audits dependencies
-  against known advisories on every run, and its actions are pinned to commit
-  SHAs rather than movable tags.
+  against known advisories on every run — over the frozen dependency set, so
+  neither the editable project nor the auditor's own dependencies enter the
+  result — and its actions are pinned to commit SHAs rather than movable tags.
 - `discover` now advises which runtime to use instead of pointing at the
   default. A workflow that asks for an `agent`, `model`, `reasoning`, or
   `profile` on any step — at any nesting depth, including loop bodies, per-item

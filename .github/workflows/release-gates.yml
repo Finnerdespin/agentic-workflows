@@ -28,10 +28,14 @@ jobs:
       # Build, inspect, and install artifacts without the source checkout on sys.path.
       - run: python scripts/check_distribution.py
       # One runtime dependency and a few dev tools, but the answer to
-      # "is any of it known-vulnerable?" should be checked every run,
-      # not when someone thinks to ask. Skips the editable project itself.
+      # "is any of it known-vulnerable?" should be checked every run, not when
+      # someone thinks to ask. The set is frozen before pip-audit is installed
+      # so the auditor's own dependencies are not audited too, and without the
+      # editable project, which has no release to compare against and which
+      # --strict would otherwise treat as a collection failure.
       - name: Audit dependencies for known vulnerabilities
         if: matrix.python-version == '3.12'
         run: |
+          python -m pip freeze --exclude-editable > "$RUNNER_TEMP/audit-requirements.txt"
           python -m pip install pip-audit
-          pip-audit --skip-editable --strict
+          pip-audit --strict -r "$RUNNER_TEMP/audit-requirements.txt"
