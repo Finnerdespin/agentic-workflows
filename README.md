@@ -403,8 +403,10 @@ needed, remove secrets first and share only the smallest relevant copy through
 your approved channel. Prefer environment variables or a secret manager over
 placing credentials in workflow configuration, metadata, or command arguments.
 
-To report a security vulnerability, follow [SECURITY.md](SECURITY.md) rather
-than opening a public issue.
+[SECURITY.md](SECURITY.md) describes what ww can do on your machine — where
+the trust boundary sits, what runs your configuration, and what reaches the
+network — and how to report a vulnerability privately rather than in a public
+issue.
 
 ## Git branches and worktrees
 
