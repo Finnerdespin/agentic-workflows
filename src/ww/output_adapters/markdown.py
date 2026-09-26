@@ -996,10 +996,28 @@ def _failure(lines: Lines, instruction: Instruction) -> None:
             and instruction.caller_role == "worker"
         ):
             _append_section(lines, "Operator recovery")
-            lines.append(
-                "Report the error above to the user, who is the `ww` operator, "
-                "and wait for their decision. Then run exactly the option they "
-                "chose:"
+            lines.extend(
+                [
+                    "The task is paused here and nothing else will run until the "
+                    "user, who is the `ww` operator, decides. Hand over to them "
+                    "now, in your own words but covering all of this:",
+                    "",
+                    "- **What failed**: the command above, and what it printed. "
+                    "Quote the output rather than summarising it away.",
+                    "- **What is safe**: the work completed so far is saved. "
+                    "Nothing is lost by stopping here, and nothing after this "
+                    "step has run.",
+                    "- **What you need from them**: one of the two choices "
+                    "below. Say plainly that you will not pick for them.",
+                    "- **What happens next**: if they fix the cause, tell them "
+                    "to say so and you will re-run the handler. If they want it "
+                    "skipped, tell them you need that in words, and a reason to "
+                    "record.",
+                    "",
+                    "Then wait. Do not retry on a hunch, edit around the "
+                    "failure, or move on to another task. When they answer, run "
+                    "exactly the option they chose:",
+                ]
             )
             for command in instruction.recovery_commands:
                 purpose = (

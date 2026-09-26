@@ -1821,6 +1821,44 @@ ww-agentic-workflows cleanup
 ww-agentic-workflows reset TASK-123 --yes
 ```
 
+## When an automatic handler fails
+
+ww stops the task and hands the decision to the operator. It never retries on
+its own and never works around the failure, because both would hide a real
+problem behind a green workflow.
+
+The page the agent receives names the command and shows what it printed:
+
+```markdown
+### Error
+
+automatic handler failed (1) running: python -m pytest -q
+
+2 failed, 1 passed
+```
+
+Either stream is reported — stderr when it has something, otherwise stdout,
+which is where pytest, ruff, and mypy actually write. Output longer than forty
+lines is tailed, and the complete text stays available through
+`ww artifacts <task-id>`.
+
+Under "Operator recovery" the agent is told to hand over: report what failed
+and quote the output, say that completed work is saved and that nothing after
+the step has run, ask for a decision without making it, and state what happens
+next either way. Then stop and wait.
+
+Two routes lead out, and the agent runs whichever the operator picks:
+
+```console
+./ww next <task-id> --retry --role manager
+./ww next <task-id> --force --force-reason "<reason>" --role manager
+```
+
+`--retry` runs the same handler again, for when the cause has been fixed.
+`--force` skips it and records the operator's reason in the task, so a skipped
+check is visible afterwards rather than forgotten. A loop that hits its
+iteration limit escalates the same way, and the force there leaves the loop.
+
 ## Installing the ww skill during init
 
 `init` offers the ww skill to every agent integration it knows about. In a

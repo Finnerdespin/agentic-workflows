@@ -25,6 +25,7 @@ from .contracts import (
     AssertionDefinition,
     AutomaticAction,
     CommandDefinition,
+    CommandOutcome,
     CommandRequest,
     Commands,
     ExecutionContext,
@@ -34,6 +35,41 @@ from .contracts import (
 )
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _failure_message(
+    rendered: tuple[str, ...], index: int, outcome: CommandOutcome
+) -> str:
+    """Say what failed and show what it printed, on whichever stream it used.
+
+    Only stderr used to be reported. Test runners, linters, and type checkers
+    overwhelmingly print their diagnostics to stdout, so the commonest failure
+    in ww produced "automatic handler failed (1):" and nothing else -- leaving
+    the operator, who has to choose between retrying and forcing past it,
+    with no basis for the decision.
+    """
+    detail = outcome.stderr.strip() or outcome.stdout.strip()
+    command = shlex.join(rendered) if rendered else ""
+    heading = f"automatic handler failed ({outcome.exit_code})"
+    if command:
+        heading += f" running: {command}"
+    elif index:
+        heading += f" at command {index + 1}"
+    if not detail:
+        return f"{heading}; it printed nothing. See the command output artifact."
+    return f"{heading}\n\n{_tail(detail)}"
+
+
+def _tail(detail: str, limit: int = 40) -> str:
+    """Keep the end of the output, where a failure normally explains itself."""
+    lines = detail.splitlines()
+    if len(lines) <= limit:
+        return detail
+    dropped = len(lines) - limit
+    return "\n".join(
+        [f"[{dropped} earlier line(s) omitted; the full output is an artifact]"]
+        + lines[-limit:]
+    )
 
 
 class CommandAction(AutomaticAction[Commands, Commands]):
@@ -48,6 +84,7 @@ class CommandAction(AutomaticAction[Commands, Commands]):
             # changed after interruption, but a completed external operation is
             # never re-rendered or replayed merely to aggregate its output.
             outcome = context.commands.completed(index)
+            rendered_for_report: tuple[str, ...] = ()
             if outcome is None:
                 try:
                     rendered, environment = self.render_command(
@@ -55,6 +92,7 @@ class CommandAction(AutomaticAction[Commands, Commands]):
                     )
                 except StateError as error:
                     return ActionResult.failed(str(error))
+                rendered_for_report = tuple(rendered)
                 outcome = context.commands.execute(
                     index, CommandRequest(tuple(rendered), environment)
                 )
@@ -65,8 +103,7 @@ class CommandAction(AutomaticAction[Commands, Commands]):
                         f"{outcome.launch_error}"
                     )
                 return ActionResult.failed(
-                    f"automatic handler failed ({outcome.exit_code}): "
-                    f"{outcome.stderr.strip()}"
+                    _failure_message(rendered_for_report, index, outcome)
                 )
             outputs.append(outcome.stdout)
         output = "\n".join(part for part in outputs if part).strip()

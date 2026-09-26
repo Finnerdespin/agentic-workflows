@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.workflow_helpers import start_after_init
+from ww.cli import main
 from ww.errors import StateError
 from ww.output_adapters.markdown import MarkdownOutputAdapter
 from ww.service import WorkflowService
@@ -181,3 +182,75 @@ def test_a_failed_handler_shows_the_operator_recovery_commands(tmp_path: Path) -
     retried = service.next(TASK, retry=True)
     assert retried.status != "failed"
     assert retried.item_name == "update-workflow-summary"
+
+
+def test_a_failed_handler_hands_the_decision_to_the_operator(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The page must set expectations, not just list two commands."""
+    (tmp_path / "workflows.yaml").write_text(
+        """
+handlers:
+  - name: tests
+    argv: [python3, -c, "import sys; print('2 failed'); sys.exit(1)"]
+
+hooks:
+  before_complete:
+    - workflows: [task]
+      steps: [develop]
+      handlers:
+        - name: tests
+
+workflows:
+  - name: task
+    steps:
+      - develop: Implement the change.
+      - document: Write it up.
+""",
+        encoding="utf-8",
+    )
+    root = ["--root", str(tmp_path)]
+    assert (
+        main(
+            [
+                *root,
+                "start",
+                "T-1",
+                "-w",
+                "task",
+                "-a",
+                "claudecode",
+                "--init-artifact",
+                "Add retries.",
+                "--role",
+                "manager",
+            ]
+        )
+        == 0
+    )
+    main([*root, "next", "T-1", "--role", "manager"])
+    capsys.readouterr()
+    main(
+        [
+            *root,
+            "complete",
+            "T-1",
+            "--role",
+            "worker",
+            "--artifact",
+            "Done.",
+            "--summary-for-next-step",
+            "Retries added.",
+        ]
+    )
+    page = capsys.readouterr().out
+
+    # What the handler actually printed, so the operator can decide at all.
+    assert "2 failed" in page
+    # What the agent must tell them, and that it must then stop.
+    assert "Then wait." in page
+    assert "the work completed so far is saved" in page
+    assert "you will not pick for them" in page
+    # Both routes out, with the force needing a recorded reason.
+    assert "--retry --role manager" in page
+    assert '--force --force-reason "<reason>"' in page

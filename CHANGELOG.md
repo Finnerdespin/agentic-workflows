@@ -11,6 +11,18 @@ is in [documentation/limitations.md](documentation/limitations.md).
 
 ## 2026-09-26
 
+- A failed automatic handler now tells the operator enough to decide. The
+  error names the command that failed and shows what it printed, falling back
+  to stdout when stderr is empty — test runners, linters, and type checkers
+  nearly all report on stdout, so the commonest failure in ww used to read
+  `automatic handler failed (1):` and nothing more. Long output is tailed to
+  its last 40 lines, with the whole of it still saved as an artifact.
+- The escalation page now hands over explicitly rather than listing two
+  commands. It tells the agent to report what failed and quote the output, to
+  say that completed work is saved and nothing after the step has run, to ask
+  for a decision without picking one, and to set the expectation either way:
+  say when the cause is fixed and the handler is re-run, or ask for a skip in
+  words with a reason to record. Then wait.
 - `init` explains what `WW_AGENT_INSTRUCTIONS.md` is before asking whether to
   reference it, the way the task-ID question already described its options:
   that it tells agents to start from `./ww discover` and follow each response,

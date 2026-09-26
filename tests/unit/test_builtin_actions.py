@@ -449,8 +449,15 @@ def test_execute_joins_outputs_and_skips_completed_segments() -> None:
     ("outcome", "error"),
     [
         (
+            # The command is named and its output quoted, so the operator can
+            # judge the failure without going to find the artifact.
             CommandOutcome(False, stderr=" boom \n", exit_code=2),
-            "automatic handler failed (2): boom",
+            "automatic handler failed (2) running: x\n\nboom",
+        ),
+        (
+            # Diagnostics on stdout are what pytest, ruff and mypy produce.
+            CommandOutcome(False, stdout="2 failed, 1 passed", exit_code=1),
+            "automatic handler failed (1) running: x\n\n2 failed, 1 passed",
         ),
         (
             CommandOutcome(False, launch_error="not found"),
