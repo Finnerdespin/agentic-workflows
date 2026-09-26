@@ -1,12 +1,15 @@
 # Changelog
 
-All notable changes to ww-agentic-workflows are recorded here.
+`main` is the branch users run, so everything recorded here is live the moment
+it lands — there is no staging period and nothing is waiting to ship. Sections
+are dated by the day `main` changed, newest first, because there are no version
+tags yet to group them by. Pulled a week ago? Read down to that date and stop.
 
-The pre-1.0 compatibility policy — what may change between versions, and what
-ww does not promise yet — lives in
-[documentation/limitations.md](documentation/limitations.md).
+The package version stays at 0.1.0 while the release process is not yet in
+place. What may change between two pulls, and what ww does not promise yet,
+is in [documentation/limitations.md](documentation/limitations.md).
 
-## Unreleased
+## 2026-09-26
 
 - ww tells you when the checkout it runs from is behind the branch that
   checkout tracks. The notice is written above the command's own output and
@@ -150,9 +153,9 @@ ww does not promise yet — lives in
 - `artifacts` adds an absolute `path` beside each project-relative reference,
   for workers running in a linked worktree.
 
-## 0.1.0 - 2026-09-23
+## 2026-09-23
 
-First public release.
+The initial feature set, written before the repository was public.
 
 - `workflows.yaml` compiled into an explicit, saved plan with steps, nested
   steps, hooks, handlers, loops, assessments, items, children, and handoffs.

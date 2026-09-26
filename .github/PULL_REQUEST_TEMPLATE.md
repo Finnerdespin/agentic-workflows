@@ -18,6 +18,6 @@
 
 ## Checklist
 
-- [ ] `CHANGELOG.md` updated under `## Unreleased`, if the change is user-visible.
+- [ ] `CHANGELOG.md` updated under today's date, if the change is user-visible.
 - [ ] Documentation under `documentation/` updated, if behaviour or `workflows.yaml` changed.
 - [ ] Persisted-format changes carry a schema bump and are called out as incompatible.

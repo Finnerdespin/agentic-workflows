@@ -15,6 +15,20 @@ def _git(*arguments: str, cwd: Path) -> None:
     subprocess.run(["git", *arguments], cwd=cwd, check=True, capture_output=True)
 
 
+def _agent_answers(*approve: str) -> str:
+    """One answer per agent-skill prompt, in the order ``init`` asks them.
+
+    Taken from the implementation's own directory list so that adding an
+    agent integration does not leave these tests answering the wrong prompt.
+    """
+    from ww.cli.initialization import _known_agent_directories
+
+    return "".join(
+        f"{'y' if directory in approve else 'n'}\n"
+        for directory in _known_agent_directories()
+    )
+
+
 def _complete_init(root: Path, task_id: str, capsys) -> None:  # type: ignore[no-untyped-def]
     del root, task_id, capsys
 
@@ -569,7 +583,9 @@ def test_init_targets_new_directory_and_creates_approved_agent_files(
     project = tmp_path / "new-project"
     project.mkdir()
     monkeypatch.chdir(project)
-    monkeypatch.setattr("sys.stdin", InteractiveInput("uuid\ny\ny\n" + "n\n" * 7))
+    monkeypatch.setattr(
+        "sys.stdin", InteractiveInput("uuid\ny\n" + _agent_answers(".codex"))
+    )
     assert main(["init"]) == 0
     output = capsys.readouterr().out
     assert (project / "workflows.yaml").is_file()
@@ -591,7 +607,9 @@ def test_init_remembers_agent_answers_and_restores_approved_skill(
         def isatty(self) -> bool:
             return True
 
-    monkeypatch.setattr("sys.stdin", InteractiveInput("uuid\ny\ny\n" + "n\n" * 7))
+    monkeypatch.setattr(
+        "sys.stdin", InteractiveInput("uuid\ny\n" + _agent_answers(".codex"))
+    )
     assert main(["--root", str(tmp_path), "init"]) == 0
     capsys.readouterr()
     skill = tmp_path / ".codex/skills/ww/SKILL.md"
@@ -734,7 +752,9 @@ def test_init_interactive_wizard_collects_project_choices(
     )
     monkeypatch.setattr(
         "sys.stdin",
-        InteractiveInput("digit\ny\n\nhotfix/{{task_id}}\ny\ny\n" + "n\n" * 8),
+        InteractiveInput(
+            "digit\ny\n\nhotfix/{{task_id}}\ny\ny\n" + _agent_answers()
+        ),
     )
 
     assert main(["--root", str(tmp_path), "init"]) == 0

@@ -16,10 +16,11 @@ Everyone taking part is expected to follow the
    or [feature request](https://github.com/from-developers-for-developers/agentic-workflows/issues/new?template=feature_request.yml)
    template. Report a security vulnerability privately, through
    [SECURITY.md](SECURITY.md), never as a public issue.
-2. **Branch from `dev` and open the pull request against `dev`.** `main` is
-   what users install; it takes changes from `dev`, not directly from a
-   contributor's branch. See the branch table in
-   [README.md](README.md#releases-and-branches).
+2. **Branch from `main`, and open the pull request against `main`.** It is
+   the branch users run, so it is the base every change starts from. `dev`
+   carries the maintainers' in-flight work and is not an integration branch
+   for contributions — do not branch from it or target it. See the branch
+   table in [README.md](README.md#releases-and-branches).
 3. **Keep one change per pull request.** An unrelated refactor in the same
    branch makes the real change harder to review and harder to revert.
 4. **Enable the repository's Git hook** so staged sources get their SPDX
@@ -32,9 +33,13 @@ Everyone taking part is expected to follow the
 5. **Run the checks** relevant to your change, and the complete set for
    anything release-facing. They are listed under
    [Run the checks](#run-the-checks).
-6. **Record it.** Add an entry to `CHANGELOG.md` under `## Unreleased` if the
-   change is user-visible, and update the affected documents under
-   `documentation/` if behaviour or `workflows.yaml` changed. A change to a
+6. **Record it.** If the change is user-visible, add an entry to
+   `CHANGELOG.md` under a `## YYYY-MM-DD` heading for the day it lands,
+   creating that heading if it is not there yet — merging to `main` puts it
+   in front of users straight away, so nothing waits for a release. Keep the
+   entry to a line or two: it is also what ww shows people in the terminal
+   when it tells them an update is available. Update the affected documents
+   under `documentation/` if behaviour or `workflows.yaml` changed. A change to a
    persisted format needs a schema bump and must be called out as
    incompatible.
 

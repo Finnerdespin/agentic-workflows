@@ -86,8 +86,12 @@ A report is most useful with all four of these:
 Sanitise before pasting: `.ww/` and command output may contain credentials or
 other private values. See [Sensitive runtime data](#sensitive-runtime-data) below.
 
-[documentation/limitations.md](documentation/limitations.md) lists what ww
-deliberately does not do yet, so you can tell a limitation from a bug.
+Two things to read before you rely on it:
+[Compatibility is not guaranteed yet](#compatibility-is-not-guaranteed-yet),
+because nothing is promised to survive a pull of `main` while the design is
+still settling, and
+[documentation/limitations.md](documentation/limitations.md), which lists what
+ww deliberately does not do yet so you can tell a limitation from a bug.
 
 ## Getting started
 
@@ -267,9 +271,28 @@ worker completes its main action and associated agent hooks until ww explicitly
 hands control back. Each started workflow uses a saved plan, so later
 configuration edits cannot alter work already in progress.
 
-Workflows, steps, and handlers may request an `agent`, `model`, and `reasoning`.
-The manager sees these advisory requests under `auto` and records the
-worker it selected; `single` retains the requests for inspection but ignores them.
+### Runtimes: who actually performs a step
+
+Every task runs manager and worker responsibilities — the manager dispatches
+assignments and handles recovery, the worker performs one assignment and
+reports it. A **runtime** decides where those two live. The plan and the
+commands are identical either way; only the division of labour differs.
+
+| Runtime | Who does the work |
+| --- | --- |
+| `single` (the default) | One session is both manager and worker and performs every assignment itself. No subagents. |
+| `auto` | The manager delegates each assignment to a worker agent it selects, and records which one it used. |
+
+Choose one with `--runtime` / `-r` on `start`. Omitted, ww takes the workflow's
+own `runtime` if it declares one, then `"runtime"` in
+`agentic-workflows.json`, and falls back to `single`. The flag always wins.
+
+This is what makes the next part meaningful. Workflows, steps, and handlers may
+request an `agent`, `model`, and `reasoning` — always advisory, never binding.
+In `auto` the manager reads them when picking a worker, and records the worker
+it actually chose. In `single` there is nobody to delegate to, so ww keeps the
+requests on the saved plan for inspection and otherwise ignores them: your own
+session's settings are the ones in force.
 
 An optional `projects` list in `agentic-workflows.json` lets one ww instance
 coordinate tasks and child tasks across several repositories, each working in
@@ -285,12 +308,14 @@ would slow the work down right now. Once ww reaches a stable version it will be
 distributed as an ordinary Python package, and this section will change.
 
 **There is no versioning yet.** No tags, no release notes per version, nothing
-to pin to. The branches carry the meaning instead:
+to pin to — but do not read that as "not released". Whatever is on `main` is
+released, in the only sense that matters here: people are running it. The
+branches carry that meaning instead of version numbers:
 
 | Branch | Use it for |
 | --- | --- |
-| `main` | **What users should install and run.** It receives updates frequently. |
-| `dev` | Active development. Unstable by design — do not use it for real work. |
+| `main` | **What users should install and run**, and what contributions branch from. It receives updates frequently. |
+| `dev` | The maintainers' in-flight work. Unstable by design — do not use it for real work, and do not target it in a pull request. |
 
 To update, pull `main` in your clone:
 
@@ -298,10 +323,11 @@ To update, pull `main` in your clone:
 git -C ~/tools/agentic-workflows pull
 ```
 
-Because the install is editable, that is the whole upgrade. Frequent updates on
-`main` mean behaviour can change between two pulls; finish or reset in-flight
-tasks before upgrading rather than expecting an older task's saved state to
-still be readable. [CHANGELOG.md](CHANGELOG.md) records what changed.
+Because the install is editable, that is the whole upgrade — and frequent
+updates on `main` mean behaviour really can change between two pulls. Read
+[CHANGELOG.md](CHANGELOG.md) when you do, and see
+[Compatibility is not guaranteed yet](#compatibility-is-not-guaranteed-yet)
+for what that can break and how to avoid it.
 
 You do not have to remember to look. ww compares its own checkout against the
 branch it tracks, at most once a day, and prints a short notice above the
@@ -319,7 +345,37 @@ and each notice appears once:
 Set `"update_check": false` in `agentic-workflows.json` to switch it off for a
 project, or `WW_UPDATE_CHECK=0` to switch it off everywhere.
 
-## Supported platforms and compatibility
+## Compatibility is not guaranteed yet
+
+**While ww is under active development and has no stable version, nothing
+about it is promised to stay the same between two pulls of `main`.** There is
+no deprecation period: a thing can change in the pull that changes it. This
+applies to all of the following.
+
+| Surface | What can change |
+| --- | --- |
+| `workflows.yaml` | Keys can be renamed, replaced, or removed, and a file that lints today may be rejected tomorrow. `save_metadata` already became `update_metadata`. |
+| The CLI | Commands, flags, and printed output are not a stable interface. Do not parse them in scripts you rely on. |
+| Task state under `.ww/` | The on-disk format carries a version and the reader rejects any other one. After an upgrade, an unfinished task may simply not load. |
+| The extension API | Documented and the most stable of these, but still able to change before 1.0. |
+
+What this means in practice:
+
+- **Finish or `reset` in-flight tasks before you pull.** That is the failure
+  people actually hit — a task started last week refusing to load this week.
+- **Read [CHANGELOG.md](CHANGELOG.md) when you pull.** ww also tells you when
+  your checkout is behind and shows you the entries you would be pulling in.
+- **If you need stability right now, pin to a commit** and upgrade
+  deliberately: `git -C ~/tools/agentic-workflows checkout <sha>`.
+
+None of this is carelessness — it is the trade for shipping changes quickly
+while the design settles. When ww reaches a stable version it will be
+distributed as an ordinary Python package with the usual guarantees, and this
+section goes away. [documentation/limitations.md](documentation/limitations.md)
+has the full detail, alongside the execution model and the workflow shapes ww
+does not support.
+
+## Supported platforms
 
 ww supports Python 3.10 and newer on POSIX systems, including current Linux
 and macOS releases. Its filesystem locking uses POSIX `fcntl`; native Windows
@@ -327,13 +383,8 @@ is not supported. Windows users can run ww in a POSIX-compatible environment
 such as WSL.
 
 Task state and saved plans are private runtime data, not a general-purpose
-interchange format. During active development, ww supports only the current
-on-disk format; do not edit these files by hand. Extension authors should use
+interchange format; do not edit them by hand. Extension authors should use
 only the documented public extension API.
-
-[documentation/limitations.md](documentation/limitations.md) covers the rest of
-the boundaries: compatibility policy, the execution model, and the workflow
-shapes ww does not support.
 
 ## Sensitive runtime data
 

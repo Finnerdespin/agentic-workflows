@@ -233,15 +233,19 @@ def test_init_without_skills_suggests_installing_them(
 def test_init_asks_before_installing_each_skill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ww.cli.initialization import _skill_paths
+    from ww.cli.initialization import _known_agent_directories, _skill_paths
 
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".cursor").mkdir()
-    answers = iter(["n", "", "n", "n", "n", "n", "n", "n"])
     prompts: list[str] = []
-    monkeypatch.setattr(
-        "builtins.input", lambda prompt: prompts.append(prompt) or next(answers)
-    )
+
+    def answer(prompt: str) -> str:
+        # Answer by what is being asked, not by position: the order and the
+        # number of agent directories both change as integrations are added.
+        prompts.append(prompt)
+        return "" if ".claude/skills" in prompt else "n"
+
+    monkeypatch.setattr("builtins.input", answer)
 
     paths = _skill_paths(Storage(tmp_path), None, interactive=True)
 
@@ -249,7 +253,7 @@ def test_init_asks_before_installing_each_skill(
     assert "Install the ww skill into .claude/skills/ww/SKILL.md? [Y/n]: " in prompts
     assert "Install the ww skill into .cursor/skills/ww/SKILL.md? [Y/n]: " in prompts
     assert "Create .codex and install the ww skill? [y/N]: " in prompts
-    assert len(prompts) == 8
+    assert len(prompts) == len(_known_agent_directories())
     assert _skill_paths(Storage(tmp_path), False, interactive=True) == ()
 
 

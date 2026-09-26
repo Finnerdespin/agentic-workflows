@@ -19,13 +19,21 @@ installed from a checkout in editable mode, and `main` moves frequently; see
 the install section of [README.md](../README.md) for what that means in
 practice.
 
-The package version identifies a release rather than promising that every
-internal representation is a public API. Before 1.0, a minor-version increase
-may include an intentionally documented incompatible change, and persisted
-formats may change with a schema bump and no migration of unreleased data.
-Patch releases do not intentionally change documented command-line,
-persisted-record, or public extension API contracts. Release notes call out an
-incompatible change and the affected boundary.
+**Today there is no compatibility guarantee at all.** With no releases to
+define a boundary, nothing — `workflows.yaml` keys, command-line surface,
+printed output, persisted task state, or the extension API — is promised to
+survive a pull of `main`, and there is no deprecation period before a change
+lands. The trade is deliberate: the design is still settling, and freezing
+surfaces now would freeze mistakes with them.
+
+Once releases exist, the policy becomes the usual one. The package version
+will identify a release rather than promising that every internal
+representation is a public API. Before 1.0, a minor-version increase may
+include an intentionally documented incompatible change, and persisted formats
+may change with a schema bump and no migration of unreleased data. Patch
+releases will not intentionally change documented command-line,
+persisted-record, or public extension API contracts, and release notes will
+call out an incompatible change and the affected boundary.
 
 Persisted plans and execution records carry their current format versions, and
 the reader rejects every other version rather than guessing or migrating it.
