@@ -8,6 +8,7 @@ consumes a compiled plan rather than independently deciding which hooks apply.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -347,6 +348,43 @@ def binds_task_identity(workflow: WorkflowDefinition) -> bool:
     return bool(workflow.steps) and any(
         value.name == "task_id" for value in workflow.steps[0].provide
     )
+
+
+def delegation_requests(workflow: WorkflowDefinition) -> tuple[str, ...]:
+    """Names of the steps in ``workflow`` that ask for a particular worker.
+
+    A declared ``agent``, ``model``, ``reasoning``, or ``profile`` is a request
+    for who should perform the work. Only the ``auto`` runtime can act on one,
+    because only it delegates; ``single`` keeps the request on the plan and
+    performs the step in the caller's own session. A workflow that carries
+    these is therefore written for ``auto``, and saying so lets ``discover``
+    point that out rather than leaving the reader to infer it.
+    """
+    requested: list[str] = []
+    if _requests_worker(workflow):
+        requested.append(workflow.name)
+    for step in _every_step(workflow.steps):
+        if _requests_worker(step) and step.name not in requested:
+            requested.append(step.name)
+    return tuple(requested)
+
+
+def _requests_worker(definition: object) -> bool:
+    return any(
+        getattr(definition, field, None)
+        for field in ("agent", "model", "reasoning", "profile")
+    )
+
+
+def _every_step(steps: Iterable[StepDefinition]) -> Iterator[StepDefinition]:
+    """Walk a step tree: nested steps, loop bodies, assessments, item stages."""
+    for step in steps:
+        yield step
+        yield from _every_step(step.child_steps)
+        yield from _every_step(step.loop_steps)
+        yield from _every_step(step.assessment_outcomes)
+        if step.items is not None:
+            yield from _every_step(step.items.steps)
 
 
 @dataclass(frozen=True)

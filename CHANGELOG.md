@@ -11,6 +11,15 @@ is in [documentation/limitations.md](documentation/limitations.md).
 
 ## 2026-09-26
 
+- `discover` now advises which runtime to use instead of pointing at the
+  default. A workflow that asks for an `agent`, `model`, `reasoning`, or
+  `profile` on any step — at any nesting depth, including loop bodies, per-item
+  stages, and assessment branches — is listed with the steps that ask and a
+  note to start it with `--runtime auto`, because only `auto` delegates and so
+  only `auto` can honour the request. The `--runtime` option no longer reads
+  "omit it for the default", which was steering agents to `single` whatever the
+  workflow wanted, and the JSON carries the same information as
+  `delegation_requests` per workflow.
 - ww tells you when the checkout it runs from is behind the branch that
   checkout tracks. The notice is written above the command's own output and
   names the changelog bullets added since, so an agent relaying that output

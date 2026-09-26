@@ -18,6 +18,7 @@ from ww.project_config import FILE_NAME
 from ww.runtimes import RUNTIME_DESCRIPTIONS
 from ww.storage import Storage
 from ww.task_ids import EXPLICIT_TASK_FORMAT
+from ww.workflow_config import delegation_requests
 
 START_COMMAND = (
     "./ww start <TASK-ID> --workflow <workflow> --agent <agent> "
@@ -52,6 +53,18 @@ EXPLICIT_ID_GUIDANCE = (
     "named in the request, such as a Jira key. Omit it only for a workflow "
     "that obtains its own ID in its first step; ww never generates one here."
 )
+RUNTIME_GUIDANCE = (
+    "Choose deliberately rather than defaulting. Use `auto` when the workflow "
+    "requests an agent, model, reasoning, or profile for any step — those "
+    "requests only take effect when the manager delegates, and the list above "
+    "marks the workflows that carry them. Use `single` when nothing is "
+    "requested, when delegation is unavailable or not permitted, or when the "
+    "user asked you to do the work yourself."
+)
+DELEGATION_NOTE = (
+    "Steps requesting a specific worker are honoured only under `--runtime "
+    "auto`; `single` records them and performs the step in this session."
+)
 MODES_GUIDANCE = (
     "Optional and repeatable. Explicit modes replace the workflow's default "
     "modes, so repeat any default you want to keep. Select a mode only when "
@@ -77,6 +90,7 @@ def discover(storage: Storage, extensions: ExtensionRegistry) -> dict[str, objec
                 "description": workflow.description,
                 "default_modes": list(workflow.modes),
                 "runtime": workflow.runtime,
+                "delegation_requests": list(delegation_requests(workflow)),
             }
             for workflow in configuration.workflows
         ],
@@ -99,6 +113,7 @@ def discover(storage: Storage, extensions: ExtensionRegistry) -> dict[str, objec
         "agents": [*AGENT_DIRECTORIES, f"{CUSTOM_AGENT_PREFIX}<name>"],
         "branch_strategies": list(extensions.branch_strategies()),
         "model_and_reasoning": MODEL_GUIDANCE,
+        "runtime_guidance": RUNTIME_GUIDANCE,
         "task_id": (EXPLICIT_ID_GUIDANCE if explicit_ids else TASK_ID_GUIDANCE),
         "modes_guidance": MODES_GUIDANCE,
         "commands": {
@@ -158,6 +173,13 @@ def _markdown(report: dict[str, object]) -> list[str]:
             text += " Default modes: " + ", ".join(f"`{m}`" for m in defaults) + "."
         if workflow.get("runtime"):
             text += f" Runtime: `{workflow['runtime']}`."
+        requests = _strings(workflow.get("delegation_requests", []))
+        if requests:
+            text += (
+                " Requests a specific worker on: "
+                + ", ".join(f"`{name}`" for name in requests)
+                + " — start it with `--runtime auto` so those requests apply."
+            )
         lines.append(text)
     if not workflows:
         lines.append("No workflows are configured; ww cannot start a task.")
@@ -179,10 +201,11 @@ def _markdown(report: dict[str, object]) -> list[str]:
         lines.append("No modes are configured.")
     lines.extend(["", "## Runtimes", ""])
     lines.extend(
-        f"- `{runtime['name']}`{' (default)' if runtime['default'] else ''} — "
+        f"- `{runtime['name']}`{' (project default)' if runtime['default'] else ''} — "
         f"{runtime['description']}"
         for runtime in runtimes
     )
+    lines.extend(["", str(report["runtime_guidance"])])
     lines.extend(["", "## Roles", ""])
     lines.extend(f"- `{role['name']}` — {role['description']}" for role in roles)
     lines.extend(
@@ -195,7 +218,8 @@ def _markdown(report: dict[str, object]) -> list[str]:
             f"- `--mode`: {report['modes_guidance']}",
             "- `--runtime` (`-r`): "
             + " or ".join(f"`{runtime['name']}`" for runtime in runtimes)
-            + "; omit it for the default, "
+            + f". {DELEGATION_NOTE} Omitted, ww uses the workflow's own "
+            "runtime if it declares one, then the project default, "
             + next(f"`{runtime['name']}`" for runtime in runtimes if runtime["default"])
             + ".",
             f"- `--model`, `--reasoning`: {report['model_and_reasoning']}",

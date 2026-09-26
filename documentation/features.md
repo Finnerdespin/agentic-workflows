@@ -1821,6 +1821,34 @@ ww-agentic-workflows cleanup
 ww-agentic-workflows reset TASK-123 --yes
 ```
 
+## Choosing a runtime
+
+`single` is the default, and an agent reading `discover` used to be told
+little more than that — so it tended to omit `--runtime` and get `single`
+every time, including for workflows written to delegate.
+
+`discover` now makes the choice explicit. Any workflow declaring an `agent`,
+`model`, `reasoning`, or `profile` is listed with the steps that declare one
+and a note to start it under `auto`:
+
+```markdown
+- `reviewed` — Cheap triage, strong review. Requests a specific worker on:
+  `triage`, `review` — start it with `--runtime auto` so those requests apply.
+```
+
+The search covers the whole workflow, not just its top level: nested steps,
+loop bodies, per-item stages, and assessment branches all count, as does a
+setting on the workflow itself. A workflow that requests nothing is listed
+without a note, so the marker means something.
+
+`--json` reports the same thing as `delegation_requests`, the list of step
+names carrying a request, empty when there are none.
+
+This is advice, not enforcement. `single` remains right when nothing is
+requested, when delegation is unavailable or not permitted, or when the
+operator asked the session to do the work itself — and a workflow that always
+wants delegation should declare `runtime: auto` rather than rely on the reader.
+
 ## Staying current with the ww checkout
 
 ww is installed from a Git clone in editable mode, so whether a newer ww

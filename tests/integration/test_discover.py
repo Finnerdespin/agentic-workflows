@@ -71,13 +71,16 @@ def test_discover_lists_choices_options_and_commands(
         "- `bugfix` — No description.",
         "- `economy` — Use as few tokens as possible. Prefer short answers.",
         "- `ext/ww/git/modes:conventional-commits` — Write commit messages",
-        "- `single` (default) — One session plays both manager and worker",
+        "- `single` (project default) — One session plays both manager and worker",
         "- `auto` — The manager delegates each assignment to a worker agent",
         "- `manager` — Runs start and next",
         "- `worker` — Performs one assignment",
         "`claudecode`",
         "or `custom:<name>`.",
-        "- `--runtime` (`-r`): `single` or `auto`; omit it for the default, `single`.",
+        "- `--runtime` (`-r`): `single` or `auto`. Steps requesting a specific "
+        "worker are honoured only under `--runtime auto`; `single` records them "
+        "and performs the step in this session. Omitted, ww uses the workflow's "
+        "own runtime if it declares one, then the project default, `single`.",
         "- `--model`, `--reasoning`: Optional.",
         "- `--branch-strategy`: `default`, `bugfix`.",
         "./ww start <TASK-ID> --workflow <workflow> --agent <agent> "
@@ -101,8 +104,15 @@ def test_discover_json_carries_the_same_choices(
             "description": "Implement a change.",
             "default_modes": ["economy"],
             "runtime": None,
+            "delegation_requests": [],
         },
-        {"name": "bugfix", "description": "", "default_modes": [], "runtime": None},
+        {
+            "name": "bugfix",
+            "description": "",
+            "default_modes": [],
+            "runtime": None,
+            "delegation_requests": [],
+        },
     ]
     assert [runtime["name"] for runtime in report["runtimes"]] == ["single", "auto"]
     assert [runtime["default"] for runtime in report["runtimes"]] == [True, False]
@@ -314,8 +324,8 @@ def test_the_project_may_choose_the_default_runtime(
 
     text = _discover(root, capsys)
     report = json.loads(_discover(root, capsys, "--json"))
-    assert "- `auto` (default) — " in text
-    assert "omit it for the default, `auto`." in text
+    assert "- `auto` (project default) — " in text
+    assert "then the project default, `auto`." in text
     assert [r["default"] for r in report["runtimes"]] == [False, True]
 
     defaulted = service.start("task", "T1", agent="codex")
@@ -352,3 +362,60 @@ def test_the_configured_runtime_must_exist(tmp_path: Path) -> None:
         ConfigurationError, match="runtime must be one of: single, auto"
     ):
         WorkflowService(Storage(root)).start("task", "T1", agent="codex")
+
+
+def _runtime_advice_project(tmp_path: Path) -> Path:
+    (tmp_path / "workflows.yaml").write_text(
+        """
+workflows:
+  - name: plain
+    description: Nothing is requested.
+    steps:
+      - develop: Implement it.
+
+  - name: reviewed
+    description: Cheap triage, careful review.
+    steps:
+      - triage: Sort the reports.
+        model: cheapest
+      - review: Review it properly.
+        reasoning: high
+""",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_discover_points_a_workflow_that_requests_workers_at_the_auto_runtime(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = _discover(_runtime_advice_project(tmp_path), capsys)
+
+    assert "`triage`, `review`" in output
+    assert "start it with `--runtime auto` so those requests apply" in output
+    # The workflow that asks for nothing is left alone.
+    plain = next(line for line in output.splitlines() if line.startswith("- `plain`"))
+    assert "auto" not in plain
+
+
+def test_discover_asks_for_a_deliberate_runtime_instead_of_the_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = _discover(_runtime_advice_project(tmp_path), capsys)
+
+    assert "Choose deliberately rather than defaulting." in output
+    # The old wording told the agent to omit the flag, which always meant single.
+    assert "omit it for the default" not in output
+    assert "honoured only under `--runtime auto`" in output
+
+
+def test_discover_reports_worker_requests_as_data(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report = json.loads(_discover(_runtime_advice_project(tmp_path), capsys, "--json"))
+
+    requests = {
+        workflow["name"]: workflow["delegation_requests"]
+        for workflow in report["workflows"]
+    }
+    assert requests == {"plain": [], "reviewed": ["triage", "review"]}
