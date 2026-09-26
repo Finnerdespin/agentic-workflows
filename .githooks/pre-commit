@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Add SPDX identifiers to staged Python and shell files before committing.
+exec python3 scripts/ensure_spdx_license.py --staged

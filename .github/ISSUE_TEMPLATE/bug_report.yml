@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in ww behaved differently from what its documentation says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. ww is in beta, so this is genuinely useful.
+
+        **Before you paste:** `.ww/`, command output, and task state can contain
+        credentials or other private values. Sanitise anything you copy in. See
+        [Sensitive runtime data](https://github.com/from-developers-for-developers/agentic-workflows#sensitive-runtime-data).
+
+        Check [limitations.md](https://github.com/from-developers-for-developers/agentic-workflows/blob/main/documentation/limitations.md)
+        first — it lists what ww deliberately does not do yet.
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: The workflow
+      description: >
+        The relevant part of your `workflows.yaml`, reduced to what still
+        reproduces the problem.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The command and its output
+      description: >
+        The exact command you ran, its exit code, and the exact message ww
+        printed. Sanitise it first.
+      render: console
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: agent_account
+    attributes:
+      label: Your agent's own account of what went wrong
+      description: >
+        If you hit this while working through an agent, ask it to summarise
+        what it ran, what ww told it, and where it got stuck, and paste that
+        here. It is often the fastest route to the real cause. Leave blank if
+        you ran ww by hand.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: ww version
+      description: Output of `ww-agentic-workflows --version`, plus the commit you are on.
+      placeholder: "0.1.0 (main @ 28e55aa)"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS, Python version, and agent
+      placeholder: "macOS 15.5, Python 3.12.14, Claude Code"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime
+      options:
+        - single
+        - auto
+        - not applicable
+    validations:
+      required: true

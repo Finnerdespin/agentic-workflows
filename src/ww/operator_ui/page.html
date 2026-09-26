@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ww operator page</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1c1f24; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2563eb; --accent-ink: #ffffff;
+    --open: #fff7d6; --answered: #e8f0ff; --processed: #e8f5ec; --danger: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1e2126; --ink: #e6e8eb; --muted: #9aa3ad;
+      --line: #30353c; --accent: #3b82f6; --accent-ink: #ffffff;
+      --open: #3a3410; --answered: #1e2a4a; --processed: #163120; --danger: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { position: sticky; top: 0; z-index: 1; padding: 12px 16px; border-bottom: 1px solid var(--line);
+           background: var(--panel); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  .muted { color: var(--muted); }
+  #status { margin-left: auto; font-size: 13px; }
+  #status.off { color: var(--danger); }
+  main { padding: 16px; max-width: 900px; margin: 0 auto; }
+  article { background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--line);
+            border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  article.open { border-left-color: #d4a017; }
+  article.answered { border-left-color: var(--accent); }
+  article.processed { border-left-color: #2e8b57; }
+  article h2 { font-size: 14px; margin: 0 0 6px; display: flex; gap: 10px; align-items: baseline; }
+  article h2 .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px;
+           border-radius: 999px; background: var(--open); }
+  .answered .badge { background: var(--answered); }
+  .processed .badge { background: var(--processed); }
+  .badge.unsent { background: var(--danger); color: #fff; }
+  .text { white-space: pre-wrap; margin: 0 0 8px; }
+  dl { margin: 0 0 8px; font-size: 13px; }
+  dl dt { color: var(--muted); }
+  dl dd { margin: 0 0 6px; white-space: pre-wrap; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 8px; padding: 6px 10px; }
+  legend { font-size: 13px; color: var(--muted); }
+  label.choice { display: inline-block; margin-right: 16px; padding: 3px 0; cursor: pointer; }
+  label.choice .desc { color: var(--muted); font-size: 13px; }
+  textarea { width: 100%; min-height: 56px; padding: 8px; border: 1px solid var(--line); border-radius: 6px;
+             background: var(--bg); color: var(--ink); font: inherit; resize: vertical; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .given { font-size: 13px; color: var(--muted); white-space: pre-wrap; }
+  .md p { margin: 0 0 8px; } .md ul, .md ol { margin: 0 0 8px; padding-left: 22px; }
+  .md h3, .md h4, .md h5, .md h6 { margin: 8px 0 4px; font-size: 14px; }
+  .md pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow-x: auto; font-size: 13px; }
+  .md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .text.md { white-space: normal; }
+  .custom { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  .error { color: var(--danger); font-size: 13px; }
+  #note { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">ww</h1>
+  <span class="muted" id="progress"></span>
+  <button type="button" id="pause">I'm done for now</button>
+  <span id="status" class="off">connecting…</span>
+</header>
+<main>
+  <p id="note"></p>
+  <div id="items"></div>
+</main>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const key = "ww-operator-page:" + location.port;
+  let connected = false;
+  let lastSignature = null;
+  let latest = null;
+  // Drafts and answers that could not be sent survive in this tab's storage.
+  const local = load();
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(key) || "{}"); } catch (_) { return {}; }
+  }
+  function save() {
+    try { localStorage.setItem(key, JSON.stringify(local)); } catch (_) {}
+  }
+  // A draft is the comment being typed; a pick is sent the moment it is
+  // made, so what is shown as picked always comes from ww or from the
+  // queue of answers that could not be sent.
+  function draft(itemId) {
+    local.drafts = local.drafts || {};
+    if (!local.drafts[itemId]) local.drafts[itemId] = { comment: "" };
+    return local.drafts[itemId];
+  }
+  function queued(itemId) { return (local.queue || {})[itemId]; }
+  function bindRun(state) {
+    if (local.run_id !== state.run_id) {
+      // Another run of the task: nothing typed for the old one applies.
+      for (const key of Object.keys(local)) delete local[key];
+      local.run_id = state.run_id;
+      save();
+    }
+  }
+
+  function esc(text) {
+    return String(text).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[c]);
+  }
+
+  // A small Markdown renderer: headings, lists, code, emphasis, links.
+  function inline(text) {
+    return esc(text)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  }
+  function markdown(text) {
+    const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+    const out = [];
+    let list = null, para = [], code = null;
+    const flush = () => {
+      if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; }
+      if (list) { out.push(`</${list}>`); list = null; }
+    };
+    for (const raw of lines) {
+      if (code !== null) {
+        if (/^```/.test(raw)) { out.push(`<pre><code>${esc(code.join("\n"))}</code></pre>`); code = null; }
+        else code.push(raw);
+        continue;
+      }
+      const line = raw.replace(/\s+$/, "");
+      let m;
+      if (/^```/.test(line)) { flush(); code = []; }
+      else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) { flush(); const n = Math.min(m[1].length + 2, 6); out.push(`<h${n}>${inline(m[2])}</h${n}>`); }
+      else if ((m = /^\s*[-*]\s+(.*)$/.exec(line))) { if (para.length) flush(); if (list !== "ul") { if (list) out.push(`</${list}>`); out.push("<ul>"); list = "ul"; } out.push(`<li>${inline(m[1])}</li>`); }
+      else if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { if (para.length) flush(); if (list !== "ol") { if (list) out.push(`</${list}>`); out.push("<ol>"); list = "ol"; } out.push(`<li>${inline(m[1])}</li>`); }
+      else if (line === "") flush();
+      else { if (list) { out.push(`</${list}>`); list = null; } para.push(line); }
+    }
+    if (code !== null) out.push(`<pre><code>${esc(code.join("\n"))}</code></pre>`);
+    flush();
+    return out.join("");
+  }
+
+  function card(item, choices) {
+    const unsent = queued(item.id);
+    const badge = unsent ? `<span class="badge unsent">not sent</span>`
+      : `<span class="badge">${{ open: "open", answered: "answered", processed: "applied" }[item.status]}</span>`;
+    const fields = [["Analysis", item.processed_item], ["Proposed solution", item.proposed_solution],
+                    ["Actual solution", item.actual_solution]].filter(([, v]) => v);
+    const custom = Object.entries(item.fields || {});
+    let body = `<h2><span class="id">${esc(item.id)}</span>${badge}</h2>` +
+               `<div class="text md">${markdown(item.item)}</div>` +
+               (fields.length ? `<dl>${fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="md">${markdown(v)}</dd>`).join("")}</dl>` : "") +
+               (custom.length ? `<div class="custom">${custom.map(([k, v]) => `<span><code>${esc(k)}</code> ${esc(v)}</span>`).join("")}</div>` : "");
+    if (item.status === "processed") {
+      body += `<div class="given">Answer: ${esc(item.answer || "(comment)")}` +
+              (item.answer_comment ? `\n${esc(item.answer_comment)}` : "") + `</div>`;
+      return body;
+    }
+    const d = draft(item.id);
+    const picked = unsent ? unsent.choice : item.answer;
+    const comment = unsent ? unsent.comment : (d.comment || item.answer_comment || "");
+    d.comment = comment;
+    if (choices.length) {
+      body += `<fieldset><legend>Answer</legend>` + choices.map((choice, i) =>
+        `<label class="choice"><input type="radio" name="choice-${esc(item.id)}" value="${esc(choice.label)}"` +
+        `${choice.label === picked ? " checked" : ""}> <strong>${i + 1}. ${esc(choice.label)}</strong>` +
+        (choice.description ? ` <span class="desc">— ${esc(choice.description)}</span>` : "") + `</label>`
+      ).join("") + `</fieldset>`;
+    }
+    body += `<textarea data-comment="${esc(item.id)}" placeholder="Comment${choices.length ? " (optional; saved as you type)" : " (saved as you type)"}">${esc(comment)}</textarea>` +
+            `<div class="actions">` +
+            (item.answered_at ? `<span class="given">recorded ${esc(item.answered_at)}</span>` : `<span class="given">not answered yet</span>`) +
+            (unsent ? `<span class="error">Not sent yet: the agent was not waiting. It is sent when it waits again; closing this tab loses it.</span>` : "") +
+            `<span class="error" data-error="${esc(item.id)}"></span></div>`;
+    return body;
+  }
+
+  function render(state) {
+    latest = state;
+    $("title").textContent = `${state.task_id} · ${state.workflow}` + (state.stage ? ` · ${state.stage}` : "");
+    $("progress").textContent = `${state.answered} of ${state.total} answered`;
+    $("note").textContent = state.paused
+      ? "You said you were done for now; the agent has stopped. Answering an item brings it back."
+      : connected ? "Answer the items in any order. Every answer is recorded as soon as you give it."
+      : "The agent is not waiting right now.";
+    const holder = $("items");
+    holder.innerHTML = state.items.map((item) =>
+      `<article class="${esc(item.status)}" data-item="${esc(item.id)}">${card(item, state.choices)}</article>`
+    ).join("");
+    holder.querySelectorAll("textarea[data-comment]").forEach((area) => {
+      const itemId = area.dataset.comment;
+      area.addEventListener("input", () => {
+        draft(itemId).comment = area.value; save();
+        clearTimeout(timers[itemId]);
+        timers[itemId] = setTimeout(() => answer(itemId, true), 1200);
+      });
+      area.addEventListener("blur", () => { clearTimeout(timers[itemId]); answer(itemId, true); });
+    });
+    holder.querySelectorAll("input[type=radio]").forEach((radio) => {
+      radio.addEventListener("change", () => answer(radio.name.slice(7), false, radio.value));
+    });
+    save();
+    setEnabled();
+  }
+
+  // Keep what the operator is typing: refresh only the marks around it.
+  function patchStatus(state) {
+    latest = state;
+    $("progress").textContent = `${state.answered} of ${state.total} answered`;
+    for (const item of state.items) {
+      const article = document.querySelector(`article[data-item="${CSS.escape(item.id)}"]`);
+      if (!article) continue;
+      article.className = item.status;
+      const badge = article.querySelector(".badge:not(.unsent)");
+      if (badge) badge.textContent = { open: "open", answered: "answered", processed: "applied" }[item.status];
+      const given = article.querySelector(".actions .given");
+      if (given) given.textContent = item.answered_at ? `recorded ${item.answered_at}` : "not answered yet";
+    }
+  }
+
+  function setEnabled() {
+    document.querySelectorAll("button").forEach((button) => { button.disabled = !connected; });
+  }
+
+  async function post(path, payload) {
+    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify(payload) });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || response.statusText);
+  }
+
+  async function send(itemId, d) {
+    await post("/act", { action: "answer", item_id: itemId, choice: d.choice, comment: d.comment.trim() });
+    delete (local.queue || {})[itemId];
+    save();
+  }
+
+  const timers = {};
+  const sent = {};
+
+  function pickedNow(itemId) {
+    const checked = document.querySelector(`input[name="choice-${CSS.escape(itemId)}"]:checked`);
+    return checked ? checked.value : null;
+  }
+
+  async function answer(itemId, fromComment, choice) {
+    const d = { choice: choice || pickedNow(itemId), comment: draft(itemId).comment || "" };
+    const error = document.querySelector(`[data-error="${CSS.escape(itemId)}"]`);
+    if (error) error.textContent = "";
+    const hasChoices = latest && latest.choices.length;
+    // A comment alone cannot answer a stage with choices; wait for the pick.
+    if (fromComment && hasChoices && !d.choice) return;
+    if (!hasChoices && !d.comment.trim()) return;
+    const signature = JSON.stringify([d.choice, d.comment.trim()]);
+    if (sent[itemId] === signature) return;
+    try {
+      await send(itemId, d);
+      sent[itemId] = signature;
+    } catch (failure) {
+      if (failure instanceof TypeError) {
+        // The server is gone: keep the answer to send when a wait is back.
+        local.queue = local.queue || {};
+        local.queue[itemId] = { choice: d.choice, comment: d.comment };
+        save();
+      } else if (error) {
+        error.textContent = failure.message;
+      }
+    }
+    lastSignature = null;
+    refresh();
+  }
+
+  async function flushQueue() {
+    for (const [itemId, d] of Object.entries(local.queue || {})) {
+      try { await send(itemId, d); } catch (failure) {
+        if (!(failure instanceof TypeError)) { delete local.queue[itemId]; save(); }
+        return;
+      }
+    }
+  }
+
+  $("pause").addEventListener("click", async () => {
+    try { await post("/act", { action: "pause" }); lastSignature = null; } catch (failure) { alert(failure.message); }
+    refresh();
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (connected && navigator.sendBeacon) navigator.sendBeacon("/closing", "{}");
+  });
+
+  async function refresh() {
+    try {
+      const response = await fetch("/state", { cache: "no-store" });
+      if (!response.ok) throw new Error(response.statusText);
+      const state = await response.json();
+      const wasConnected = connected;
+      connected = true;
+      $("status").textContent = "agent is waiting for your answers";
+      $("status").classList.remove("off");
+      if (!wasConnected && Object.keys(local.queue || {}).length) { await flushQueue(); lastSignature = null; }
+      bindRun(state);
+      const signature = JSON.stringify(state);
+      const typing = document.activeElement && document.activeElement.tagName === "TEXTAREA";
+      if (signature !== lastSignature || !wasConnected) {
+        lastSignature = signature;
+        if (typing) patchStatus(state); else render(state);
+      }
+    } catch (failure) {
+      connected = false;
+      $("status").textContent = "waiting for the agent…";
+      $("status").classList.add("off");
+      setEnabled();
+      if (latest) $("note").textContent = "The agent is not waiting right now. Answers you give now are kept in this tab and sent when it waits again.";
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 1000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ww-agentic-workflows"
+version = "0.1.0"
+description = "A local-first, resumable workflow CLI for people and AI agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "ww contributors" }]
+keywords = ["agents", "workflow", "automation", "cli", "coding-agents", "mcp"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Operating System :: POSIX",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+  "Topic :: Software Development :: Build Tools",
+]
+dependencies = ["PyYAML>=6.0.2"]
+
+[project.urls]
+Homepage = "https://agenticworkflows.dev"
+Documentation = "https://github.com/from-developers-for-developers/agentic-workflows/tree/main/documentation"
+Repository = "https://github.com/from-developers-for-developers/agentic-workflows"
+Issues = "https://github.com/from-developers-for-developers/agentic-workflows/issues"
+Security = "https://github.com/from-developers-for-developers/agentic-workflows/security/advisories/new"
+Changelog = "https://github.com/from-developers-for-developers/agentic-workflows/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "mypy>=1.11",
+  "pytest>=8.3",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+ww-agentic-workflows = "ww.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ww"]
+include = ["src/ww/assets/*.md", "src/ww/operator_ui/*.html"]
+force-include = { "ext/ww/git/extension.py" = "ww/_bundled_extensions/ww/git/extension.py" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RET", "N", "PLR2004"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests compare against literal expectations; naming each would hide them.
+"tests/**" = ["PLR2004"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/ww"]
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true

@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Workflow-runtime definitions for agent orchestration."""
+
+from ww.contracts import CallerRole
+from ww.errors import ConfigurationError
+
+RUNTIME_INSTRUCTIONS = {
+    "single": (
+        "Use this session for both manager and worker responsibilities. The "
+        "manager dispatches an assignment; the worker completes its action and "
+        "associated hooks until ww hands control back.",
+        "Do not spawn subagents.",
+        "Configured agent, model, reasoning, profile, skill, and built-in hints "
+        "are ignored. The user-controlled session settings are authoritative.",
+    ),
+    "auto": (
+        "The manager dispatches each assignment to a worker and handles recovery.",
+        "Reassess the requested worker shape at every assignment boundary. You "
+        "may use one worker for every step, choose a fresh worker per step or "
+        "assignment, or perform the assignment yourself.",
+        "Requested workflow settings take precedence over profile or skill "
+        "preferences. For auto, consider the profile, skill, task, available "
+        "workers, and cost/quality tradeoff.",
+        "If the exact request is unavailable, select the closest worker and "
+        "report the difference. Agent hints are advisory and currently unenforced.",
+        "The worker submits its own results and associated hook results with "
+        "--role worker until ww explicitly hands control back. At handoff it "
+        "returns a concise outcome and artifact references to the manager.",
+        "A worker may delegate one bounded hook when its runtime permits, but "
+        "that worker remains responsible for submitting the result. Nested "
+        "workers must not complete the same item or run manager commands.",
+        "Use this runtime when the work needs execution settings this session "
+        "cannot change, because a worker can be launched with them.",
+    ),
+}
+
+# One-line summaries for choosing a runtime; ``RUNTIME_INSTRUCTIONS`` holds the
+# guidance repeated in every instruction.
+RUNTIME_DESCRIPTIONS = {
+    "single": (
+        "One session plays both manager and worker and does every assignment "
+        "itself, without subagents."
+    ),
+    "auto": (
+        "The manager delegates each assignment to a worker agent it selects, "
+        "using the requested agent, model, and reasoning. Use it when "
+        "delegation is available and permitted."
+    ),
+}
+DEFAULT_RUNTIME = "single"
+
+CLI_OWNERSHIP_WARNING = (
+    "Strict: only ./ww start, next, and complete operate this flow. Do not mimic "
+    "or bypass it with direct commands, or read workflows.yaml; follow only the "
+    "ww execution plan."
+)
+
+
+def runtime_instruction(
+    name: str, next_role: CallerRole | None = None
+) -> tuple[str, ...]:
+    """Return a validated instruction for a persisted workflow runtime."""
+    try:
+        instructions = RUNTIME_INSTRUCTIONS[name]
+        role_instruction: tuple[str, ...]
+        if next_role == "worker":
+            role_instruction = (
+                "Worker responsibility: perform the active assignment and use "
+                "the displayed --role worker completion command. Continue its "
+                "associated hooks until ww reports a manager handoff.",
+            )
+        elif next_role == "manager":
+            role_instruction = (
+                "Manager responsibility: dispatch the next assignment or handle "
+                "the displayed recovery action. Do not ask a worker to run a "
+                "manager command.",
+            )
+        else:
+            role_instruction = ()
+        return (*instructions, *role_instruction, CLI_OWNERSHIP_WARNING)
+    except KeyError as error:
+        supported = ", ".join(sorted(RUNTIME_INSTRUCTIONS))
+        raise ConfigurationError(
+            f"unsupported workflow runtime {name!r}; choose one of: {supported}"
+        ) from error

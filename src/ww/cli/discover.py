@@ -1,0 +1,264 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""``discover``: everything an agent needs to choose and start a ww task.
+
+The embeddable agent instructions stay short and send agents here, so the
+choices shown always come from the project's current configuration.
+"""
+
+from __future__ import annotations
+
+import json
+
+from ww.config import load_configuration, load_modes
+from ww.contracts import CALLER_ROLES
+from ww.discovery import AGENT_DIRECTORIES, CUSTOM_AGENT_PREFIX
+from ww.extensions import ExtensionRegistry
+from ww.instructions.commands import TASK_PLACEHOLDER, instruction_command
+from ww.project_config import FILE_NAME
+from ww.runtimes import RUNTIME_DESCRIPTIONS
+from ww.storage import Storage
+from ww.task_ids import EXPLICIT_TASK_FORMAT
+
+START_COMMAND = (
+    "./ww start <TASK-ID> --workflow <workflow> --agent <agent> "
+    '--init-artifact "<the user\'s requirements, normalized>" --role manager'
+)
+STATUS_COMMAND = f"./ww status {TASK_PLACEHOLDER}"
+PLAN_COMMAND = "./ww plan --workflow <workflow> --agent <agent>"
+DISABLED_MESSAGE = (
+    "Do not use ww for this work: do not start, continue, or complete ww "
+    "tasks. Carry out the request without ww, and tell the user that ww is "
+    f'disabled in {FILE_NAME} ("enabled": false).'
+)
+ROLE_DESCRIPTIONS = {
+    "manager": "Runs start and next, dispatches assignments, and handles recovery.",
+    "worker": (
+        "Performs one assignment and runs only the --role worker commands ww shows it."
+    ),
+}
+MODEL_GUIDANCE = (
+    "Optional. The model and reasoning level of your own session. Omit them "
+    "(auto) unless you know them or the user asks for specific values; any "
+    "value your agent understands is accepted as guidance."
+)
+TASK_ID_GUIDANCE = (
+    "When the request names an external ticket, such as a Jira key, use that "
+    "key as <TASK-ID> so the task matches the issue it works on. Omit <TASK-ID> "
+    "only when the request names none, or when the workflow obtains its own ID "
+    "in its first step; ww then assigns one."
+)
+EXPLICIT_ID_GUIDANCE = (
+    "This project requires an explicit <TASK-ID>: use the external ticket key "
+    "named in the request, such as a Jira key. Omit it only for a workflow "
+    "that obtains its own ID in its first step; ww never generates one here."
+)
+MODES_GUIDANCE = (
+    "Optional and repeatable. Explicit modes replace the workflow's default "
+    "modes, so repeat any default you want to keep. Select a mode only when "
+    "the user's request matches its description."
+)
+
+
+def discover(storage: Storage, extensions: ExtensionRegistry) -> dict[str, object]:
+    """Collect the choices and commands for starting a task in this project."""
+    if not extensions.config.enabled:
+        return {"enabled": False, "message": DISABLED_MESSAGE}
+    configuration = load_configuration(storage.config_path, extensions)
+    explicit_ids = configuration.task_format == EXPLICIT_TASK_FORMAT
+    default_runtime = extensions.config.runtime
+    modes = load_modes(storage.config_path, extensions)
+    modes.update({mode.name: mode for mode in extensions.qualified_modes()})
+    return {
+        "enabled": True,
+        "projects": [project.to_dict() for project in extensions.config.projects],
+        "workflows": [
+            {
+                "name": workflow.name,
+                "description": workflow.description,
+                "default_modes": list(workflow.modes),
+                "runtime": workflow.runtime,
+            }
+            for workflow in configuration.workflows
+        ],
+        "modes": [
+            {"name": mode.name, "description": " ".join(mode.description)}
+            for mode in modes.values()
+        ],
+        "runtimes": [
+            {
+                "name": name,
+                "description": description,
+                "default": name == default_runtime,
+            }
+            for name, description in RUNTIME_DESCRIPTIONS.items()
+        ],
+        "roles": [
+            {"name": role, "description": ROLE_DESCRIPTIONS[role]}
+            for role in CALLER_ROLES
+        ],
+        "agents": [*AGENT_DIRECTORIES, f"{CUSTOM_AGENT_PREFIX}<name>"],
+        "branch_strategies": list(extensions.branch_strategies()),
+        "model_and_reasoning": MODEL_GUIDANCE,
+        "task_id": (EXPLICIT_ID_GUIDANCE if explicit_ids else TASK_ID_GUIDANCE),
+        "modes_guidance": MODES_GUIDANCE,
+        "commands": {
+            "start": START_COMMAND,
+            "instruction": instruction_command(TASK_PLACEHOLDER, role="manager"),
+            "status": STATUS_COMMAND,
+            "plan": PLAN_COMMAND,
+        },
+    }
+
+
+def render_discover(
+    storage: Storage, extensions: ExtensionRegistry, json_output: bool
+) -> str:
+    report = discover(storage, extensions)
+    if json_output:
+        return json.dumps(report, indent=2)
+    if not report["enabled"]:
+        return "\n".join(
+            [
+                "# ww discover",
+                "",
+                "**ww is disabled for this project.**",
+                "",
+                DISABLED_MESSAGE,
+            ]
+        )
+    return "\n".join(_markdown(report))
+
+
+def _markdown(report: dict[str, object]) -> list[str]:
+    workflows = _entries(report["workflows"])
+    modes = _entries(report["modes"])
+    runtimes = _entries(report["runtimes"])
+    roles = _entries(report["roles"])
+    *named, custom = (f"`{agent}`" for agent in _strings(report["agents"]))
+    agents = ", ".join(named) + f", or {custom}"
+    strategies = _strings(report["branch_strategies"])
+    commands = report["commands"]
+    assert isinstance(commands, dict)
+    lines = [
+        "# ww discover",
+        "",
+        "ww is enabled for this project. Choose the workflow that matches the "
+        "request, and modes only when they apply, then start the task with the "
+        "command below.",
+        "",
+        "## Workflows",
+        "",
+    ]
+    for workflow in workflows:
+        text = (
+            f"- `{workflow['name']}` — {workflow['description'] or 'No description.'}"
+        )
+        defaults = _strings(workflow["default_modes"])
+        if defaults:
+            text += " Default modes: " + ", ".join(f"`{m}`" for m in defaults) + "."
+        if workflow.get("runtime"):
+            text += f" Runtime: `{workflow['runtime']}`."
+        lines.append(text)
+    if not workflows:
+        lines.append("No workflows are configured; ww cannot start a task.")
+    projects = _entries(report["projects"])
+    if projects:
+        lines.extend(["", "## Projects", ""])
+        lines.extend(
+            f"- `{project['name']}` at `{project['path']}`"
+            + (f" — {project['description']}" if project["description"] else "")
+            for project in projects
+        )
+        lines.append(
+            "A task works in one project directory when started with "
+            "`--project <name>`; without it, the task works in the root."
+        )
+    lines.extend(["", "## Modes", ""])
+    lines.extend(f"- `{mode['name']}` — {mode['description']}" for mode in modes)
+    if not modes:
+        lines.append("No modes are configured.")
+    lines.extend(["", "## Runtimes", ""])
+    lines.extend(
+        f"- `{runtime['name']}`{' (default)' if runtime['default'] else ''} — "
+        f"{runtime['description']}"
+        for runtime in runtimes
+    )
+    lines.extend(["", "## Roles", ""])
+    lines.extend(f"- `{role['name']}` — {role['description']}" for role in roles)
+    lines.extend(
+        [
+            "",
+            "## Start options",
+            "",
+            "- `--workflow` (`-w`): one workflow name from the list above.",
+            f"- `--agent` (`-a`): your agent integration: {agents}.",
+            f"- `--mode`: {report['modes_guidance']}",
+            "- `--runtime` (`-r`): "
+            + " or ".join(f"`{runtime['name']}`" for runtime in runtimes)
+            + "; omit it for the default, "
+            + next(f"`{runtime['name']}`" for runtime in runtimes if runtime["default"])
+            + ".",
+            f"- `--model`, `--reasoning`: {report['model_and_reasoning']}",
+            *(
+                [
+                    "- `--project`: "
+                    + ", ".join(f"`{project['name']}`" for project in projects)
+                    + ". Omit it to work in the root."
+                ]
+                if projects
+                else []
+            ),
+            "- `--branch-strategy`: "
+            + (
+                ", ".join(f"`{name}`" for name in strategies)
+                + ". Omit it to use the workflow's own branch format."
+                if strategies
+                else "no extension defines branch strategies here; omit it."
+            ),
+            "- `--role`: `manager` for `start`.",
+            "",
+            "## Commands",
+            "",
+            "To start a task:",
+            "",
+            "```console",
+            str(commands["start"]),
+            "```",
+            "",
+            str(report["task_id"]),
+            "",
+            "To show the instructions for an existing task:",
+            "",
+            "```console",
+            str(commands["instruction"]),
+            "```",
+            "",
+            "To see a task's status:",
+            "",
+            "```console",
+            str(commands["status"]),
+            "```",
+            "",
+            "To inspect a workflow's steps before starting:",
+            "",
+            "```console",
+            str(commands["plan"]),
+            "```",
+            "",
+            "After `start`, follow each ww response exactly until ww reports that "
+            "the workflow is complete.",
+        ]
+    )
+    return lines
+
+
+def _entries(value: object) -> list[dict[str, object]]:
+    return (
+        [entry for entry in value if isinstance(entry, dict)]
+        if isinstance(value, list)
+        else []
+    )
+
+
+def _strings(value: object) -> list[str]:
+    return [str(entry) for entry in value] if isinstance(value, list) else []

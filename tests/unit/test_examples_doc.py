@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Every example in documentation/examples.md loads, validates, and compiles."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from ww.config import load_configuration
+from ww.extensions import ExtensionRegistry
+from ww.plan import compile_workflow_plan
+from ww.project_config import load_project_config
+
+EXAMPLES = Path(__file__).parents[2] / "documentation/examples.md"
+_BLOCK = re.compile(r"^## (\d+)\. .*?$|^```(yaml|json)\n(.*?)^```$", re.S | re.M)
+# Skills and slash commands the examples refer to; a project would discover
+# them in its agent directory.
+SKILLS = ("review-code",)
+SLASH_COMMANDS = ("ship",)
+
+
+def _examples() -> list[tuple[str, list[tuple[str, str]]]]:
+    sections: list[tuple[str, list[tuple[str, str]]]] = []
+    for match in _BLOCK.finditer(EXAMPLES.read_text(encoding="utf-8")):
+        if match.group(1):
+            sections.append((match.group(1), []))
+        elif sections:
+            sections[-1][1].append((match.group(2), match.group(3)))
+    return sections
+
+
+@pytest.mark.parametrize(
+    ("number", "blocks"), _examples(), ids=[number for number, _ in _examples()]
+)
+def test_example_loads_and_compiles(
+    tmp_path: Path, number: str, blocks: list[tuple[str, str]]
+) -> None:
+    yaml_blocks = [text for kind, text in blocks if kind == "yaml"]
+    json_blocks = [text for kind, text in blocks if kind == "json"]
+    assert yaml_blocks or json_blocks, f"example {number} has no configuration"
+    skills = tmp_path / ".codex/skills"
+    for name in SKILLS:
+        (skills / name).mkdir(parents=True)
+        (skills / name / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+    commands = tmp_path / ".codex/commands"
+    commands.mkdir(parents=True)
+    for name in SLASH_COMMANDS:
+        (commands / f"{name}.md").write_text(f"# /{name}\n", encoding="utf-8")
+    for text in json_blocks:
+        (tmp_path / "agentic-workflows.json").write_text(text, encoding="utf-8")
+        settings = load_project_config(tmp_path / "agentic-workflows.json")
+        for project in settings.projects:
+            (tmp_path / project.path).mkdir(parents=True, exist_ok=True)
+    extensions = ExtensionRegistry.discover(tmp_path)
+    for text in yaml_blocks:
+        (tmp_path / "workflows.yaml").write_text(text, encoding="utf-8")
+        configuration = load_configuration(tmp_path / "workflows.yaml", extensions)
+        for workflow in configuration.workflows:
+            plan = compile_workflow_plan(
+                configuration, tmp_path, workflow.name, "codex", "TASK-1", extensions
+            )
+            assert plan.items, (number, workflow.name)
+
+
+def test_examples_are_numbered_consecutively() -> None:
+    numbers = [int(number) for number, _ in _examples()]
+
+    assert numbers == list(range(1, len(numbers) + 1))

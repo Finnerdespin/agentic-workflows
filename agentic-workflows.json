@@ -1,0 +1,18 @@
+{
+  "loop_max_times": 3,
+  "extensions": {
+    "ww/git": {
+      "commit_format": "{{task_id}}: {{commit_message}}",
+      "base_branch": "main",
+      "use_separate_branch": true,
+      "branch_name_formats": {
+        "default": "feature/{{task_id}}",
+        "bugfix": "hotfix/{{task_id}}"
+      },
+      "worktrees": true,
+      "worktree_dir": "./ww-worktrees",
+      "worktree_name_format": "{{task_id}}"
+    }
+  },
+  "enabled": true
+}

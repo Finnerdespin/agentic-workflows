@@ -1,0 +1,371 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Immutable plan data and serialization."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import TypeVar, get_args
+
+from ww.actions import PlannedAction, actions
+from ww.contracts import (
+    ChildOperation,
+    ExecutionKind,
+    ItemAssignment,
+    ItemOperation,
+    LoopAssignment,
+    PlanItemKind,
+    PlanItemOwner,
+    PlanItemPhase,
+)
+from ww.operations import LoopBoundary, PlanOperation, encode_operation
+from ww.validation import is_positive_int
+from ww.workflow_config import (
+    ChoiceDefinition,
+    DocumentDefinition,
+    DocumentUpdate,
+    ItemFieldUpdate,
+    ProvidedVariable,
+    SavedMetadata,
+)
+
+PayloadT = TypeVar("PayloadT")
+
+
+@dataclass(frozen=True)
+class PlanItem:
+    id: str
+    position: int
+    name: str
+    description: str
+    operation: PlanOperation
+    owner: PlanItemOwner
+    execution: ExecutionKind
+    requires_agent_input: bool
+    workflow: str
+    step: str
+    parent: str | None
+    phase: PlanItemPhase
+    source: str
+    registered_handler: str | None
+    gate_prompt: str | None = None
+    provide: tuple[ProvidedVariable, ...] = ()
+    save_metadata: tuple[SavedMetadata, ...] = ()
+    # Documents this agent-owned item creates or edits in place.
+    update_document: tuple[DocumentUpdate, ...] = ()
+    # Custom item fields this agent-owned item must set on its item, or on
+    # every item when it is the collection.
+    update_item: tuple[ItemFieldUpdate, ...] = ()
+    outputs: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = ()
+    requested_agent: str | None = None
+    requested_model: str | None = None
+    requested_reasoning: str | None = None
+    subagents: bool = True
+    # A conversation with the operator; performed by the session that can
+    # talk to them, so ``subagents`` is false as well.
+    interactive: bool = False
+    choices: tuple[ChoiceDefinition, ...] = ()
+    # A per-item stage the operator answers on the operator page.
+    ui: bool = False
+    model: str | None = None
+    reasoning: str | None = None
+    profile: str | None = None
+    profile_instruction: str | None = None
+    # A project-local profile file, relative to the project root; the
+    # instruction prints it absolute for the current filesystem.
+    profile_path: str | None = None
+    summary: bool = False
+    item_operation: ItemOperation | None = None
+    item_template: bool = False
+    item_id: str | None = None
+    item_assignment: ItemAssignment = "per_step"
+    # Set on every body step and hook of the nearest enclosing ``loop``.
+    loop_id: str | None = None
+    loop_assignment: LoopAssignment | None = None
+    split_instruction: str | None = None
+    # On a collection item: the items outlive the run and are reconciled.
+    shared_items: bool = False
+    # On a collection item: the field a new item must carry, and the fields
+    # whose values may each appear once across all items.
+    item_identity: str | None = None
+    item_unique: tuple[str, ...] = ()
+    artifact: bool = True
+    child_operation: ChildOperation | None = None
+    # On a children collection: each child binds its own external ID through
+    # the first step of the child workflow, so ``add-child`` takes no ``--id``.
+    child_identity: bool = False
+    # Ordered logical container paths above ``parent``. Hierarchy is explicit
+    # plan data; consumers must not reconstruct it by parsing ``step``.
+    ancestors: tuple[str, ...] = ()
+    # One-based declaration ordinal for every path in ``(*ancestors, step)``.
+    # Artifact storage uses these values to produce stable, ordered paths.
+    step_ordinals: tuple[int, ...] = ()
+    artifact_dependency: str | None = None
+    loop_break: str | None = None
+    loop_continue: str | None = None
+    assessment_question: str | None = None
+    assessment_outcomes: tuple[str, ...] = ()
+    assessment_parent: str | None = None
+    assessment_outcome: str | None = None
+
+    @property
+    def kind(self) -> PlanItemKind:
+        return self.operation.kind
+
+    @property
+    def hands_over(self) -> bool:
+        """Whether completing this item must leave a summary for the next step.
+
+        Only an ordinary agent step does: hooks, ``init`` (its artifact is the
+        requirements), and the built-in workflow summary are exempt.
+        """
+        return (
+            self.phase == "step"
+            and self.owner == "agent"
+            and not self.summary
+            and self.step != "init"
+        )
+
+    def payload_as(self, payload_type: type[PayloadT]) -> PayloadT:
+        if not isinstance(self.operation, PlannedAction):
+            raise ValueError(f"plan operation {self.kind!r} has no action payload")
+        payload = self.operation.payload
+        if not isinstance(payload, payload_type):
+            raise ValueError(
+                f"plan action {self.kind!r} does not contain "
+                f"{payload_type.__name__} data"
+            )
+        return payload
+
+    def __post_init__(self) -> None:
+        if self.phase not in {
+            "before_start_workflow",
+            "before_in_progress",
+            "step",
+            "before_complete",
+            "after_complete",
+            "before_complete_workflow",
+        }:
+            raise ValueError(f"invalid plan item phase: {self.phase!r}")
+        if self.item_operation not in {
+            None,
+            "collect",
+            "process_item",
+            "resolve_item",
+            "report_item",
+            "handle_item",
+        }:
+            raise ValueError(f"invalid item operation: {self.item_operation!r}")
+        if self.item_assignment not in get_args(ItemAssignment):
+            raise ValueError(f"invalid item assignment: {self.item_assignment!r}")
+        if self.loop_assignment is not None and self.loop_assignment not in get_args(
+            LoopAssignment
+        ):
+            raise ValueError(f"invalid loop assignment: {self.loop_assignment!r}")
+        if (self.loop_id is None) != (self.loop_assignment is None):
+            raise ValueError("loop ID and loop assignment must be set together")
+        if self.child_operation not in {None, "collect"}:
+            raise ValueError(f"invalid child operation: {self.child_operation!r}")
+        if self.step_ordinals and (
+            len(self.step_ordinals) != len(self.ancestors) + 1
+            or not all(is_positive_int(value) for value in self.step_ordinals)
+        ):
+            raise ValueError("step ordinals must match the positive step hierarchy")
+        if isinstance(self.operation, PlannedAction):
+            contract = actions.get(self.kind) if actions.contains(self.kind) else None
+            if contract is not None and (
+                self.owner != contract.owner or self.execution != contract.execution
+            ):
+                raise ValueError(
+                    f"plan item kind {self.kind!r} conflicts with owner/execution"
+                )
+            if contract is not None and not isinstance(
+                self.operation.payload, contract.planned_type
+            ):
+                raise ValueError(
+                    f"plan item kind {self.kind!r} has the wrong action payload type"
+                )
+        elif (self.owner, self.execution) != (
+            self.operation.owner,
+            self.operation.execution,
+        ):
+            raise ValueError(
+                f"{self.kind} items must be {self.operation.owner}-owned "
+                f"{self.operation.execution} operations"
+            )
+        # ``validate`` accepts the pre-planning definition.  Planned payloads
+        # may deliberately have a distinct type, and their strict boundary is
+        # the action's decoder (used for persisted snapshots).
+        if isinstance(self.operation, LoopBoundary) and (
+            self.loop_break is not None or self.loop_continue is not None
+        ):
+            raise ValueError("loop control items cannot define a worker break gate")
+        if self.loop_break is not None and (
+            self.owner != "agent" or self.phase != "step"
+        ):
+            raise ValueError("loop break gates require agent-owned step work")
+        if self.loop_continue is not None and (
+            self.owner != "agent" or self.phase != "step"
+        ):
+            raise ValueError("loop continue gates require agent-owned step work")
+        expected_agent_input = self.execution == "automatic" and bool(self.provide)
+        if self.requires_agent_input != expected_agent_input:
+            raise ValueError(
+                "requires_agent_input must match an automatic action with provided "
+                "values"
+            )
+        if self.save_metadata and self.owner != "agent":
+            raise ValueError("only agent-owned plan items can save metadata")
+        if self.update_document and self.owner != "agent":
+            raise ValueError("only agent-owned plan items can update documents")
+        if self.update_item and self.owner != "agent":
+            raise ValueError("only agent-owned plan items can update items")
+        metadata_names = [item.name for item in self.save_metadata]
+        metadata_keys = [(item.scope, item.key) for item in self.save_metadata]
+        if len(metadata_names) != len(set(metadata_names)):
+            raise ValueError("plan item has duplicate saved metadata names")
+        if len(metadata_keys) != len(set(metadata_keys)):
+            raise ValueError("plan item has duplicate saved metadata keys")
+        for index, (scope, key) in enumerate(metadata_keys):
+            if any(
+                scope == other_scope
+                and (key.startswith(f"{other}.") or other.startswith(f"{key}."))
+                for other_scope, other in metadata_keys[index + 1 :]
+            ):
+                raise ValueError("plan item has overlapping saved metadata keys")
+
+    def to_dict(self) -> dict[str, object]:
+        data = self._to_dict()
+        # Loop membership is written only where it applies, so plans saved
+        # before it existed re-serialize byte for byte and keep their digest.
+        if self.loop_id is None:
+            del data["loop_id"], data["loop_assignment"]
+        if self.profile_path is None:
+            del data["profile_path"]
+        if not self.update_document:
+            del data["update_document"]
+        if not self.interactive:
+            del data["interactive"]
+        if not self.choices:
+            del data["choices"]
+        if not self.ui:
+            del data["ui"]
+        if not self.shared_items:
+            del data["shared_items"]
+        if not self.update_item:
+            del data["update_item"]
+        if self.item_identity is None and not self.item_unique:
+            del data["item_identity"], data["item_unique"]
+        return data
+
+    def _to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "position": self.position,
+            "name": self.name,
+            "description": self.description,
+            "operation": encode_operation(self.operation),
+            "owner": self.owner,
+            "execution": self.execution,
+            "requires_agent_input": self.requires_agent_input,
+            "workflow": self.workflow,
+            "step": self.step,
+            "parent": self.parent,
+            "phase": self.phase,
+            "source": self.source,
+            "registered_handler": self.registered_handler,
+            "gate_prompt": self.gate_prompt,
+            "provide": [item.to_dict() for item in self.provide],
+            "save_metadata": [item.to_dict() for item in self.save_metadata],
+            "update_document": [item.to_dict() for item in self.update_document],
+            "outputs": list(self.outputs),
+            "dependencies": list(self.dependencies),
+            "requested_agent": self.requested_agent,
+            "requested_model": self.requested_model,
+            "requested_reasoning": self.requested_reasoning,
+            "subagents": self.subagents,
+            "interactive": self.interactive,
+            "choices": [choice.to_dict() for choice in self.choices],
+            "ui": self.ui,
+            "model": self.model,
+            "reasoning": self.reasoning,
+            "profile": self.profile,
+            "profile_instruction": self.profile_instruction,
+            "profile_path": self.profile_path,
+            "summary": self.summary,
+            "item_operation": self.item_operation,
+            "item_template": self.item_template,
+            "item_id": self.item_id,
+            "item_assignment": self.item_assignment,
+            "loop_id": self.loop_id,
+            "loop_assignment": self.loop_assignment,
+            "split_instruction": self.split_instruction,
+            "shared_items": self.shared_items,
+            "update_item": [item.to_dict() for item in self.update_item],
+            "item_identity": self.item_identity,
+            "item_unique": list(self.item_unique),
+            "artifact": self.artifact,
+            "child_operation": self.child_operation,
+            "child_identity": self.child_identity,
+            "ancestors": list(self.ancestors),
+            "step_ordinals": list(self.step_ordinals),
+            "artifact_dependency": self.artifact_dependency,
+            "loop_break": self.loop_break,
+            "loop_continue": self.loop_continue,
+            "assessment_question": self.assessment_question,
+            "assessment_outcomes": list(self.assessment_outcomes),
+            "assessment_parent": self.assessment_parent,
+            "assessment_outcome": self.assessment_outcome,
+        }
+
+
+def number_step_paths(items: tuple[PlanItem, ...]) -> tuple[PlanItem, ...]:
+    """Attach each plan item's declaration ordinal at every hierarchy level."""
+    children: dict[str | None, list[str]] = {}
+    ordinals: dict[str, int] = {}
+    for item in items:
+        chain = (*item.ancestors, item.step)
+        parent: str | None = None
+        for path in chain:
+            siblings = children.setdefault(parent, [])
+            if path not in siblings:
+                siblings.append(path)
+                ordinals[path] = len(siblings)
+            parent = path
+    return tuple(
+        replace(
+            item,
+            step_ordinals=tuple(
+                ordinals[path] for path in (*item.ancestors, item.step)
+            ),
+        )
+        for item in items
+    )
+
+
+@dataclass(frozen=True)
+class WorkflowPlan:
+    workflow: str
+    workflow_description: str
+    agent: str
+    task_id: str | None
+    modes: tuple[str, ...]
+    handoff: bool
+    items: tuple[PlanItem, ...]
+    # The root documents, frozen with the plan so a run resolves their paths
+    # without reading the configuration again.
+    documents: tuple[DocumentDefinition, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        data: dict[str, object] = {
+            "workflow": self.workflow,
+            "workflow_description": self.workflow_description,
+            "agent": self.agent,
+            "task_id": self.task_id,
+            "modes": list(self.modes),
+            "handoff": self.handoff,
+            "items": [item.to_dict() for item in self.items],
+        }
+        if self.documents:
+            data["documents"] = [document.to_dict() for document in self.documents]
+        return data

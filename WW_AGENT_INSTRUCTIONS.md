@@ -1,0 +1,46 @@
+# Working with ww
+
+This project coordinates work through ww: it saves progress, runs automatic
+handlers, and tells you which role acts next. Use it for requests to implement,
+fix, investigate, review, or otherwise carry out project work, unless the user
+asks you not to. Ordinary questions need no task.
+
+## Start here
+
+Before starting new work, run:
+
+```console
+./ww discover
+```
+
+It says whether ww is enabled here, lists the workflows, modes, runtimes, and
+start options to choose from, and shows the exact commands. If ww is disabled,
+do not use it. Choose the workflow that matches the request, keep its default
+modes unless the user's wording matches another mode, and ask the user only
+when the choice would materially change the work.
+
+When the request names an external ticket, such as a Jira key, start the task
+under that key so the task ID matches the issue. Omit the task ID only when the
+request names none, or when the workflow obtains its own ID in its first step.
+
+To continue an existing task instead of starting another, run
+`./ww instruction <task-id> --role manager`; a worker resuming its assignment
+uses `--role worker`. `./ww status <task-id>` is a quick state check.
+
+## Rules
+
+- Each ww response is authoritative. Run the displayed commands with every
+  placeholder replaced, supply what they ask for, and continue until ww
+  reports that the workflow is complete or reports an error. One completion
+  rarely finishes the task.
+- Perform only agent-owned work. Never run or work around a ww-owned handler,
+  edit ww state, or read `workflows.yaml` or ww's source to reconstruct what
+  happens next.
+- On a nonzero exit, read the whole response. If agent work cannot finish,
+  record it with `./ww fail <task-id> --role worker --error "<reason>"`. If an
+  automatic handler fails, stop and report the task and the exact error to
+  the user; recovery is their decision. When they decide, run the recovery
+  command from ww's response: `./ww next <task-id> --retry` runs the handler
+  again, `./ww next <task-id> --force --force-reason "<reason>"` skips it.
+  A loop that reached its iteration limit is escalated the same way; the
+  force there leaves the loop. Never reset a task unless asked.

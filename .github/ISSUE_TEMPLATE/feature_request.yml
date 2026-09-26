@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a capability or a change to how ww behaves.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check
+        [limitations.md](https://github.com/from-developers-for-developers/agentic-workflows/blob/main/documentation/limitations.md)
+        first — some gaps are deliberate, and it says which.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What process are you trying to express, and where does ww get in the
+        way today? Describe the workflow, not only the missing feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead
+      description: >
+        If it affects `workflows.yaml`, sketch the YAML you would want to
+        write.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried or considered
+      description: Existing hooks, handlers, items, loops, or an extension.
+    validations:
+      required: false

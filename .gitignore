@@ -1,0 +1,12 @@
+.ww/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+/ww
+.idea
+/tasks
+/.codex/config.toml
+/ww-worktrees
+.env

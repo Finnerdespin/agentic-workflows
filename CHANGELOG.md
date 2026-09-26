@@ -1,0 +1,167 @@
+# Changelog
+
+All notable changes to ww-agentic-workflows are recorded here.
+
+The pre-1.0 compatibility policy — what may change between versions, and what
+ww does not promise yet — lives in
+[documentation/limitations.md](documentation/limitations.md).
+
+## Unreleased
+
+- ww tells you when the checkout it runs from is behind the branch that
+  checkout tracks. The notice is written above the command's own output and
+  names the changelog bullets added since, so an agent relaying that output
+  shows the update to the operator before continuing; the command itself then
+  runs untouched. The only network call is a `git fetch` against the remote
+  the user cloned from, at most once a day, and every failure in it is
+  contained. Each notice is shown once, recorded per user in
+  `$XDG_CONFIG_HOME/ww-agentic-workflows/updates.json` rather than per
+  project; `updates` prints the last one again and `updates --check` looks
+  now. Commands whose output is parsed get the notice on standard error.
+  `"update_check": false` in `agentic-workflows.json` turns it off for a
+  project, `WW_UPDATE_CHECK=0` everywhere.
+- A workflow may declare `restartable: true`: a new `start` while its
+  previous run is unfinished abandons that run, which stays in the task's
+  history with the new `abandoned` status, and opens a new one. Other
+  unfinished runs still refuse a start.
+- In the `single` runtime, `complete` and `loop` open the next agent step
+  and print its page, running the `next` the same session would have run;
+  `next` on a step that is already open shows it again instead of refusing.
+  The `auto` runtime keeps the manager's `next`.
+- Items carry custom string fields, set with `--field NAME=VALUE` on
+  `add-item` and `update-item`, several per call, and found with
+  `item --by NAME=VALUE`. A step declares the fields it sets with
+  `update_item` and cannot complete while one is empty; per-item stage
+  prompts read `{{item.id}}`, `{{item.text}}`, and `{{field.<name>}}`. An
+  items step may declare `identity`, the field a new item must carry, and
+  `unique`, a pool of fields whose values may each appear once across all
+  items, including the shared store. The operator page renders Markdown,
+  shows the fields, and records a pick or a comment as it is given; the
+  wait settles for a moment after the last answer. A pick is shown only as
+  ww recorded it, or as queued while no agent waits, never from the tab's
+  own memory, and what the tab remembers belongs to one run. Choice questions in the
+  session are asked in a line or two, with the matter presented first.
+- `items: shared: true` keeps a task's items across its runs in
+  `.ww/tasks/<task-id>/items.json`, refreshed as a run adds, changes, or
+  resolves them. A new run starts from the stored items with outcomes cleared
+  and its collection step reconciles them against the source, with the new
+  `remove-item` command and `update-item --item`, both allowed during
+  collection only. `start --fresh-items` forgets the store first.
+- A per-item stage declared with `ui: true` is answered on the operator page,
+  an answer sheet over every item of the run. `interact --await` serves the
+  page for as long as it waits, then applies the answers through the ordinary
+  `interact`, `update-item`, and `complete` commands, one stage at a time in
+  plan order, and prints what it applied. Answers wait in
+  `.ww/operator-ui/<task-id>.json`, outside the task's state, from the moment
+  they are given. The page lives in the `operator_ui` package; the core knows
+  it by the `ui` flag alone. In Claude Code the page tells the agent to run
+  the wait in the background with a long `WW_OPERATOR_WAIT`, so the operator
+  can keep talking to the agent while the page is open; elsewhere the wait
+  blocks. The instruction now carries the task's `agent`. Applying writes
+  the answer onto the item as its `actual_solution`, names the documents
+  the applied stages promised so the agent records the answers there, and
+  the work section of a `ui` stage points at the page first.
+- `interact --pause` records that the operator is done for now; the step's
+  page then tells the agent to stop until they return, and only the
+  operator's own words lift it. Interaction entries of a per-item stage name
+  their item, and a plain interactive step's page shows the conversation
+  recorded so far.
+
+- A workflow may declare `runtime`, used by `start` when `--runtime` is
+  omitted; it outranks the project default and the flag outranks it.
+
+- `choices` on an interactive step declare the outcomes the operator picks
+  from; the page resolves them to the agent's own mechanism (`AskUserQuestion`
+  in Claude Code, `request_user_input` in Codex, a numbered list elsewhere),
+  `interact --choice` records the pick, and ending requires one.
+- `interactive: true` marks a step as a conversation with the operator, held
+  by the session that can talk to them (the manager in `auto`, like
+  `subagents: false`). `interact` records both sides and ends the
+  conversation, all entries append to one per-task `interactions.md` that
+  `interactions` prints, and completion is refused until the conversation was
+  recorded and ended.
+
+- A step with no content of its own and a root handler of the same name now
+  copies that handler, as a bare hook entry always did.
+- Breaking: the `save_metadata` key is now `update_metadata`; the old key is
+  rejected by `lint`.
+- Root `documents` declare durable, free-format files, task-scoped or
+  `scope: project`. A step's `update_document` names the documents it edits in
+  place, `{{documents.<name>}}` resolves to the file's absolute path, ww checks
+  the file exists on completion and journals who updated it, and
+  `ww documents [TASK-ID]` lists them. A declaration's `path` places the file
+  elsewhere in the project, `{task_id}` included, resolving inside the task's
+  working directory when the run has one. `reset` removes the task's journal
+  and its documents under `.ww`, like its metadata and interactions.
+
+- Task working directories and project-local profile files are persisted
+  relative to the project root and printed absolute for the current
+  filesystem, so state written on the host is correct inside a container that
+  mounts the checkout elsewhere.
+- A pending-input page lists the handovers of the steps completed since the
+  waiting handler last ran, and `ww/git` asks for a commit message about this
+  round's work that never repeats an earlier commit's.
+- One manager `next` now carries through preparation hooks before a loop and
+  through nested loop entries to the first worker step, instead of stopping
+  at each boundary for another `next`.
+- `save_metadata` entries take `append: true`: the key holds a list, each
+  completion may pass the name once per value or omit it, values are appended
+  with repeats dropped, and the leaf interpolates as a comma-separated list or
+  empty before anything was saved. `items` accepts `save_metadata` for the
+  built-in `handle-item` stage.
+- `ww/git`'s `git-commit` succeeds quietly when the workspace has no changes
+  instead of failing the step; project commit hooks still do not run then.
+- The built-in workflow summary lists every step's handover of the run, with
+  artifacts, as its only inputs, and requests `auto` / `auto` instead of
+  `cheapest` / `low`; `builtins.workflow_summary` still overrides it.
+- A pending-input page whose body delegates to a worker now also carries
+  the "delegate the assignment" heading instead of "provide required input".
+- In the `auto` runtime the manager's delegate page and requested worker
+  come from the assignment's step rather than a preparation hook at the
+  cursor, both roles see every item the assignment covers, a continuing
+  worker is told the same assignment continues, and its end says to stop.
+- Completing an ordinary step requires `--summary-for-next-step`, a short
+  handover stored on the step; the next step's instruction shows it under
+  "Previous step result" with the artifact's path, and the full result stays
+  in the artifact. Hooks, `init`, and the built-in summary are exempt.
+- Every worker instruction repeats the requirements saved by `init` under
+  "Task requirements" and states that results go through the completion
+  command, never into files under `.ww`.
+- An assignment with no agent step, only an automatic handler waiting for
+  values, is no longer delegated: the manager supplies the values itself.
+- `item_assignment` defaults to `all_items`, and stages that resolve to
+  different worker settings, or set `subagents: false`, now start a new
+  assignment instead of failing compilation, matching loop bodies.
+- Under `items`, `process_item`, `resolve_item`, and `report_item` strings
+  give phase guidance to the built-in `handle-item` stage, so a short-form
+  items step can say how to report without declaring stages.
+- A step's `profile` is inherited by its nested steps, loop body, and per-item
+  stages, like agent, model, and reasoning already were; a nested step may
+  still override it.
+- `loop_assignment` on a loop wrapper: `per_iteration`, now the default, keeps
+  consecutive body steps of one round in one worker assignment while they
+  resolve to the same worker settings; `per_step` restores one assignment per
+  body step. Every body step's instruction now names the loop round it is in.
+- A loop that reached its iteration limit is no longer a dead end: `next`
+  repeats the escalation instead of erroring, and `next --force --force-reason`
+  leaves the loop and continues with the steps after it.
+- `next --force` validates the task state before its confirmation prompt and
+  states what the force will do.
+- `artifacts` adds an absolute `path` beside each project-relative reference,
+  for workers running in a linked worktree.
+
+## 0.1.0 - 2026-09-23
+
+First public release.
+
+- `workflows.yaml` compiled into an explicit, saved plan with steps, nested
+  steps, hooks, handlers, loops, assessments, items, children, and handoffs.
+- Manager and worker roles with `single` and `auto` runtimes, per-item worker
+  assignments, and resumable, recoverable execution state under `.ww/`.
+- `discover` for agents, a shippable `ww` skill, and an `enabled` switch.
+- Optional `projects` for one ww instance over several repositories, with task
+  working directories and per-project base branches.
+- Children that bind their own external task IDs, for example one Jira story
+  per child.
+- Bundled `ww/git` extension for branches, worktrees, and recorded commits, and
+  a public extension API.

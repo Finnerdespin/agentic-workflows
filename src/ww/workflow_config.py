@@ -1,0 +1,376 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Normalized workflow-definition domain models.
+
+These models describe configuration, not task progress. A later execution layer
+consumes a compiled plan rather than independently deciding which hooks apply.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Protocol
+
+if TYPE_CHECKING:
+    from ww.actions import DefinedAction
+    from ww.operations import ChildWorkflowRun, WorkflowHandoff
+
+from ww.contracts import (
+    HookPhase,
+    HookScope,
+    ItemAssignment,
+    ItemOperation,
+    LoopAssignment,
+)
+
+MetadataScope = Literal["task", "project"]
+
+INIT_STEP_NAME = "init"
+INIT_STEP_PROMPT = (
+    "Record the passed requirements for this task. Correct their grammar and "
+    "style while preserving their meaning. Do not analyze, reason about, or "
+    "plan the work; only save the requirements."
+)
+
+
+class ConfigurationLoader(Protocol):
+    """A notation frontend that emits normalized workflow definitions."""
+
+    def __call__(self) -> WorkflowConfiguration:
+        """Load definitions without assigning execution semantics."""
+        ...
+
+
+@dataclass(frozen=True)
+class ProvidedVariable:
+    """An input a handler asks its executor to provide."""
+
+    name: str
+    description: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        return {"name": self.name, "description": self.description}
+
+
+@dataclass(frozen=True)
+class SavedMetadata:
+    """A metadata value an agent-owned handler must preserve."""
+
+    name: str
+    key: str
+    description: str = ""
+    scope: MetadataScope = "task"
+    # An append key holds a list: each completion may add values, none is
+    # required, and repeats are dropped.
+    append: bool = False
+
+    def __post_init__(self) -> None:
+        name_pattern = r"[A-Za-z_][A-Za-z0-9_.-]*"
+        key_pattern = r"[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*"
+        if not isinstance(self.name, str) or not re.fullmatch(name_pattern, self.name):
+            raise ValueError(f"invalid saved metadata name: {self.name!r}")
+        if not isinstance(self.key, str) or not re.fullmatch(key_pattern, self.key):
+            raise ValueError(f"invalid saved metadata key: {self.key!r}")
+        if not isinstance(self.description, str):
+            raise ValueError("saved metadata description must be a string")
+        if self.scope not in {"task", "project"}:
+            raise ValueError(f"invalid saved metadata scope: {self.scope!r}")
+        if type(self.append) is not bool:
+            raise ValueError("saved metadata append must be a bool")
+
+    def to_dict(self) -> dict[str, object]:
+        data: dict[str, object] = {
+            "name": self.name,
+            "key": self.key,
+            "description": self.description,
+            "scope": self.scope,
+        }
+        if self.append:
+            data["append"] = True
+        return data
+
+
+@dataclass(frozen=True)
+class DocumentDefinition:
+    """A root-level durable document workflows read and update across runs.
+
+    The format is the workflow's business; ww only knows the document's
+    name, scope, file, and which step last updated it.
+    """
+
+    name: str
+    description: str = ""
+    scope: MetadataScope = "task"
+    # An explicit file, relative to the project (or, for a task document, to
+    # the task's working directory when the run has one).  ``{task_id}`` is
+    # replaced in a task-scoped path.  Omitted, the document lives under
+    # ``.ww``.
+    path: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_-]*", self.name
+        ):
+            raise ValueError(f"invalid document name: {self.name!r}")
+        if not isinstance(self.description, str):
+            raise ValueError("document description must be a string")
+        if self.scope not in {"task", "project"}:
+            raise ValueError(f"invalid document scope: {self.scope!r}")
+        if self.path is not None:
+            if not isinstance(self.path, str) or not self.path.strip():
+                raise ValueError("document path must be a non-empty string")
+            parts = self.path.replace("\\", "/").split("/")
+            if self.path.startswith(("/", "\\")) or ".." in parts:
+                raise ValueError(
+                    f"document path must stay inside the project: {self.path!r}"
+                )
+            if self.scope == "project" and "{task_id}" in self.path:
+                raise ValueError("a project document path cannot use {task_id}")
+
+    def to_dict(self) -> dict[str, str]:
+        data = {"name": self.name, "description": self.description, "scope": self.scope}
+        if self.path is not None:
+            data["path"] = self.path
+        return data
+
+
+@dataclass(frozen=True)
+class DocumentUpdate:
+    """An agent-owned action's promise to create or update a document."""
+
+    name: str
+    instruction: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_-]*", self.name
+        ):
+            raise ValueError(f"invalid document update name: {self.name!r}")
+        if not isinstance(self.instruction, str):
+            raise ValueError("document update instruction must be a string")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"name": self.name, "instruction": self.instruction}
+
+
+@dataclass(frozen=True)
+class ChoiceDefinition:
+    """One option an interactive step offers the operator."""
+
+    label: str
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.label, str) or not self.label.strip():
+            raise ValueError("choice label must be a non-empty string")
+        if not isinstance(self.description, str):
+            raise ValueError("choice description must be a string")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"label": self.label, "description": self.description}
+
+
+@dataclass(frozen=True)
+class ModeDefinition:
+    name: str
+    description: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {"name": self.name, "description": list(self.description)}
+
+
+@dataclass(frozen=True)
+class ProfileDefinition:
+    """A root-level profile and its optional inline instruction."""
+
+    name: str
+    description: str | None
+
+
+@dataclass(frozen=True)
+class ItemFieldUpdate:
+    """An agent-owned action's promise to set a custom field on its item.
+
+    On a per-item stage the stage's item must carry the field when the stage
+    completes; on the collection step every collected item must.
+    """
+
+    name: str
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_-]*", self.name
+        ):
+            raise ValueError(f"invalid item field name: {self.name!r}")
+        if not isinstance(self.description, str):
+            raise ValueError("item field description must be a string")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"name": self.name, "description": self.description}
+
+
+@dataclass(frozen=True)
+class HandlerDefinition:
+    """Shared policy around a typed action or implicit name reference."""
+
+    name: str
+    description: str = ""
+    action: DefinedAction | None = None
+    # Core structural operation.  Unlike ``action``, it never enters the
+    # ordinary action registry.
+    operation: WorkflowHandoff | ChildWorkflowRun | None = None
+    gate_prompt: str | None = None
+    provide: tuple[ProvidedVariable, ...] = ()
+    save_metadata: tuple[SavedMetadata, ...] = ()
+    update_document: tuple[DocumentUpdate, ...] = ()
+    update_item: tuple[ItemFieldUpdate, ...] = ()
+    outputs: tuple[str, ...] = ()
+    agent: str | None = None
+    model: str | None = None
+    reasoning: str | None = None
+
+
+@dataclass(frozen=True)
+class HookDefinition:
+    phase: HookPhase
+    handler: HandlerDefinition
+    workflow_names: tuple[str, ...] = ()
+    step_names: tuple[str, ...] = ()
+    scope: HookScope = "global"
+    path: str = ""
+
+    def applies_to(
+        self,
+        workflow_name: str,
+        step_name: str,
+        step_path: str,
+        precise_step_paths: frozenset[str] = frozenset(),
+    ) -> bool:
+        logical_path = step_path.replace("/{item}", "")
+        step_matches = not self.step_names or any(
+            logical_path == selector
+            if selector in precise_step_paths
+            else step_name == selector
+            for selector in self.step_names
+        )
+        return (not self.workflow_names or workflow_name in self.workflow_names) and (
+            step_matches
+        )
+
+
+@dataclass(frozen=True)
+class StepDefinition(HandlerDefinition):
+    # ``false`` prevents orchestration settings from applying to this step.
+    subagents: bool = True
+    # A conversation with the operator, held by the session that can talk to
+    # them; implies the step is performed without delegation.
+    interactive: bool = False
+    # The options the operator chooses from during an interactive step.
+    choices: tuple[ChoiceDefinition, ...] = ()
+    # The operator answers this per-item stage on the operator page.
+    ui: bool = False
+    profile: str | None = None
+    profile_description: str | None = None
+    hooks: tuple[HookDefinition, ...] = ()
+    # The compiler flattens nested steps while preserving their parent identity.
+    child_steps: tuple[StepDefinition, ...] = ()
+    loop_steps: tuple[StepDefinition, ...] = ()
+    loop_max_times: int | None = None
+    loop_assignment: LoopAssignment | None = None
+    loop_break: str | None = None
+    loop_continue: str | None = None
+    # A step with ``items`` collects work items, then runs ``items.steps``
+    # once for every collected item.
+    items: ItemFlow | None = None
+    item_operation: ItemOperation | None = None
+    artifact: bool = True
+    collect_children: bool = False
+    child_workflow: str | None = None
+    artifact_dependency: str | None = None
+    # An assessment is an agent prompt whose named outcome selects a conditional
+    # subtree.  Empty outcomes use the compact positive/negative continuation.
+    assessment_question: str | None = None
+    assessment_outcomes: tuple[StepDefinition, ...] = ()
+
+
+@dataclass(frozen=True)
+class ItemFlow:
+    """The collection and per-item lifecycle owned by one ``items`` step.
+
+    ``steps`` are the resolved per-item stages: the configured ones, or the
+    single built-in stage of a bare ``items: ~``.  Empty ``steps`` collect
+    items without processing them.  Item-flow worker settings are already
+    folded into each stage while parsing.
+    """
+
+    steps: tuple[StepDefinition, ...] = ()
+    description: str | None = None
+    assignment: ItemAssignment = "all_items"
+    # The items outlive the run: every run of the task reuses them, and the
+    # collection stage reconciles them instead of splitting anew.
+    shared: bool = False
+    # The custom field a new item must carry, and the fields whose values
+    # form one pool in which each value may appear once across all items.
+    identity: str | None = None
+    unique: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkflowDefinition:
+    name: str
+    description: str = ""
+    steps: tuple[StepDefinition, ...] = ()
+    hooks: tuple[HookDefinition, ...] = ()
+    modes: tuple[str, ...] = ()
+    agent: str | None = None
+    model: str | None = None
+    reasoning: str | None = None
+    profile: str | None = None
+    profile_description: str | None = None
+    handoff: bool = False
+    # The runtime ``start`` uses for this workflow when ``--runtime`` is
+    # omitted; it outranks the project default, and the flag outranks it.
+    runtime: str | None = None
+    # A new start while this workflow's previous run is unfinished abandons
+    # that run instead of being refused.
+    restartable: bool = False
+
+
+def binds_task_identity(workflow: WorkflowDefinition) -> bool:
+    """Whether a workflow's first step supplies the task's external ID.
+
+    Such a workflow started without an ID, or run for a child added without
+    one, first executes that step as an identity request and binds the task
+    to the ID it provides.
+    """
+    return bool(workflow.steps) and any(
+        value.name == "task_id" for value in workflow.steps[0].provide
+    )
+
+
+@dataclass(frozen=True)
+class WorkflowConfiguration:
+    modes: tuple[ModeDefinition, ...]
+    profiles: tuple[ProfileDefinition, ...]
+    handlers: tuple[HandlerDefinition, ...]
+    global_hooks: tuple[HookDefinition, ...]
+    workflows: tuple[WorkflowDefinition, ...]
+    task_format: str | None = None
+    documents: tuple[DocumentDefinition, ...] = ()
+
+    @property
+    def documents_by_name(self) -> dict[str, DocumentDefinition]:
+        return {document.name: document for document in self.documents}
+
+    @property
+    def handlers_by_name(self) -> dict[str, HandlerDefinition]:
+        return {handler.name: handler for handler in self.handlers}
+
+    @property
+    def profiles_by_name(self) -> dict[str, ProfileDefinition]:
+        return {profile.name: profile for profile in self.profiles}
+
+    @property
+    def workflows_by_name(self) -> dict[str, WorkflowDefinition]:
+        return {workflow.name: workflow for workflow in self.workflows}

@@ -1,0 +1,387 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""One ``interact --await``: apply what is pending, serve, wait, apply again.
+
+The session drives the task only through the public service API an agent
+uses.  Recording an answer on its stage is ``interact`` with the pick, the
+comment, and the end; the built-in stage's item is marked with
+``update_item``; the stage is finished with ``complete``; the next stage is
+opened with ``next``.  Nothing here writes task state directly.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from ww.contracts import CallerRole
+from ww.errors import StateError
+from ww.execution_models import ExecutionState, PlanSnapshot
+from ww.plan import PlanItem
+from ww.service import WorkflowService, resolve_choice
+
+from .server import (
+    WaitOutcome,
+    operator_page_port,
+    serve_operator_page,
+)
+from .sheet import Answer, AnswerSheet
+from .view import SheetRow, sheet_rows, ui_stage
+
+
+@dataclass(frozen=True)
+class OperatorPageResult:
+    """How a wait ended and what was applied, for the agent to read."""
+
+    outcome: WaitOutcome | None
+    applied: tuple[str, ...]
+    answered: int
+    total: int
+    paused: bool
+    # Documents the applied stages promised to update: ww completed those
+    # stages, so recording the answers in the documents is the agent's to do.
+    documents: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "outcome": self.outcome,
+            "applied": list(self.applied),
+            "answered": self.answered,
+            "total": self.total,
+            "paused": self.paused,
+            "documents": list(self.documents),
+        }
+
+    def render(self) -> str:
+        """A short Markdown block printed after the step's page."""
+        ended = {
+            "answered": "The operator answered every item.",
+            "paused": "The operator said they are done for now.",
+            "closed": "The operator closed the page.",
+            "timed_out": "The wait passed with nothing new.",
+            None: "Nothing was waited for.",
+        }[self.outcome]
+        applied = (
+            "Applied the answers of " + ", ".join(self.applied) + ": each stage "
+            "is completed, its item resolved with the answer as the actual "
+            "solution, and its artifact written."
+            if self.applied
+            else "Nothing was applied."
+        )
+        progress = f"{self.answered} of {self.total} items are answered."
+        if self.paused:
+            advice = (
+                "Stop here; do not wait again and do not delegate. When the "
+                "operator returns, show the page with `instruction` and wait again."
+            )
+        elif self.outcome == "closed":
+            advice = (
+                "Do not open the page again on your own: ask the operator in the "
+                "session whether to go on, and wait again only when they say so."
+            )
+        elif self.answered < self.total:
+            advice = "Items remain; wait again."
+        else:
+            advice = "Every item is answered; go on with the page above."
+        lines = ["## Operator page", "", f"{ended} {applied} {progress} {advice}"]
+        if self.applied and self.documents:
+            lines.extend(
+                [
+                    "",
+                    "The applied stages promised to update these documents, and "
+                    "ww cannot write them: record the operator's answers for "
+                    + ", ".join(self.applied)
+                    + " in them now, before anything else.",
+                    "",
+                    *(f"- `{path}`" for path in self.documents),
+                ]
+            )
+        return "\n".join([*lines, ""])
+
+
+class _Session:
+    def __init__(
+        self, service: WorkflowService, task_id: str, caller_role: CallerRole | None
+    ) -> None:
+        self.service = service
+        self.task_id = task_id
+        self.caller_role = caller_role
+        state, _snapshot = service.load(task_id)
+        self.sheet = AnswerSheet(service.storage, task_id, state.created_at)
+        # The documents the applied stages promised to update, in order.
+        self.documents: dict[str, None] = {}
+
+    # -- reading ---------------------------------------------------------
+
+    def load(self) -> tuple[ExecutionState, PlanSnapshot]:
+        return self.service.load(self.task_id)
+
+    def rows(
+        self, state: ExecutionState, snapshot: PlanSnapshot
+    ) -> tuple[SheetRow, ...]:
+        return sheet_rows(
+            snapshot.plan,
+            state,
+            self.service.tasks.read_items(self.task_id, state.run_id),
+            self.sheet.read(state.run_id),
+            self.service.interactions.entries(self.task_id),
+        )
+
+    def current_ui_stage(
+        self, state: ExecutionState, snapshot: PlanSnapshot
+    ) -> PlanItem:
+        """The open ``ui`` stage, or why the page cannot be served."""
+        plan = snapshot.plan
+        if not state.active_item_id or state.cursor >= len(plan.items):
+            raise StateError("no agent item is in progress; use next")
+        item = plan.items[state.cursor]
+        record = state.item_executions[state.cursor]
+        if item.id != state.active_item_id or not item.ui:
+            raise StateError(
+                f"{item.name!r} is not answered on the operator page; the page "
+                "serves per-item stages declared with ui: true"
+            )
+        if record.interaction_ended:
+            raise StateError(
+                f"the interaction of {item.name!r} has ended; complete the step"
+            )
+        return item
+
+    def page_state(self) -> dict[str, object]:
+        state, snapshot = self.load()
+        plan = snapshot.plan
+        current = plan.items[state.cursor] if state.cursor < len(plan.items) else None
+        rows = self.rows(state, snapshot)
+        stage = ui_stage(plan)
+        return {
+            "task_id": self.task_id,
+            "workflow": state.workflow,
+            "run_id": state.run_id,
+            "stage": stage.name if stage else None,
+            "current_item_id": current.item_id if current and current.ui else None,
+            "paused": state.operator_paused,
+            "choices": [choice.to_dict() for choice in stage.choices] if stage else [],
+            "items": [row.to_dict() for row in rows],
+            "answered": sum(1 for row in rows if row.answered),
+            "total": len(rows),
+        }
+
+    # -- the operator's actions -------------------------------------------
+
+    def act(self, payload: dict[str, object]) -> WaitOutcome | None:
+        action = payload.get("action")
+        comment = payload.get("comment")
+        choice = payload.get("choice")
+        item_id = payload.get("item_id")
+        if not all(
+            value is None or isinstance(value, str)
+            for value in (comment, choice, item_id)
+        ):
+            raise StateError("the answer's item, choice, and comment must be strings")
+        match action:
+            case "answer":
+                if not item_id:
+                    raise StateError("an answer names its item")
+                complete = self.answer(
+                    str(item_id),
+                    str(choice).strip() if choice else None,
+                    str(comment).strip() if comment else "",
+                )
+                return "answered" if complete else None
+            case "pause":
+                # Recorded by the session once the answers given before it
+                # are applied, so applying does not lift the pause.
+                return "paused"
+            case _:
+                raise StateError(f"unknown operator action {action!r}")
+
+    def answer(self, item_id: str, choice: str | None, comment: str) -> bool:
+        """Put one answer on the sheet; true when every item has one."""
+        with self.service.tasks.lock_task(self.task_id):
+            state, snapshot = self.load()
+            rows = self.rows(state, snapshot)
+            row = next((row for row in rows if row.work.id == item_id), None)
+            if row is None:
+                raise StateError(f"item {item_id!r} was not found")
+            if row.stage is None:
+                raise StateError(f"item {item_id!r} has no stage answered on the page")
+            if row.processed:
+                raise StateError(
+                    f"the answer of {item_id!r} was already applied; it cannot change"
+                )
+            if row.stage.choices:
+                if choice is None:
+                    raise StateError("pick one of the choices")
+                choice = resolve_choice(row.stage, choice)
+            elif not comment:
+                raise StateError("write a comment")
+            else:
+                choice = None
+            self.sheet.record(state.run_id, item_id, Answer(choice, comment, _now()))
+            complete = all(
+                row.processed or row.pending or row.work.id == item_id for row in rows
+            )
+            returned = state.operator_paused
+        if returned:
+            # Answering is the operator coming back; recorded like any other
+            # word of theirs, outside the lock since interact takes it.
+            self.service.interact(
+                self.task_id,
+                operator=f"Answered {item_id} on the operator page.",
+                caller_role=self.caller_role,
+            )
+        return complete
+
+    # -- applying ----------------------------------------------------------
+
+    def apply_pending(self) -> tuple[str, ...]:
+        """Apply the sheet in plan order through the public service calls.
+
+        Stops at the first ``ui`` stage whose item has no answer, at anything
+        that is not a ``ui`` stage, and wherever ww needs the agent.
+        """
+        applied: list[str] = []
+        while True:
+            state, snapshot = self.load()
+            plan = snapshot.plan
+            if state.status not in ("pending", "in_progress") or state.cursor >= len(
+                plan.items
+            ):
+                break
+            item = plan.items[state.cursor]
+            record = state.item_executions[state.cursor]
+            if not item.ui or item.item_id is None:
+                break
+            if record.status == "pending" and state.active_item_id is None:
+                # ``next`` is the manager's command in every runtime; the
+                # session acts for whoever holds the stage.
+                self.service.next(
+                    self.task_id,
+                    caller_role="manager" if self.caller_role else None,
+                )
+                continue
+            if record.status != "in_progress" or item.id != state.active_item_id:
+                break
+            self._drop_stale(state, snapshot)
+            pending = self.sheet.read(state.run_id).get(item.item_id)
+            if pending is None:
+                break
+            self._apply(state, item, pending)
+            applied.append(item.item_id)
+        return tuple(applied)
+
+    def _drop_stale(self, state: ExecutionState, snapshot: PlanSnapshot) -> None:
+        """Forget answers whose stage a cut wait had already completed."""
+        for row in self.rows(state, snapshot):
+            if row.processed and row.pending is not None:
+                self.sheet.remove(state.run_id, row.work.id)
+
+    def _apply(self, state: ExecutionState, stage: PlanItem, answer: Answer) -> None:
+        item_id = str(stage.item_id)
+        page = self.service.instruction(self.task_id, caller_role=self.caller_role)
+        for document in page.documents:
+            self.documents[document.path] = None
+        self.service.interact(
+            self.task_id,
+            choice=answer.choice,
+            operator=answer.comment or None,
+            end=True,
+            caller_role=self.caller_role,
+        )
+        outcome = _outcome_text(answer)
+        marks: dict[str, object] = {}
+        if stage.item_operation in ("handle_item", "resolve_item"):
+            marks.update(actual_solution=outcome, resolved=True)
+        if stage.item_operation in ("handle_item", "report_item"):
+            marks["reported"] = True
+        if marks:
+            self.service.update_item(
+                self.task_id, item_id, caller_role=self.caller_role, **marks
+            )
+        work = self.service.item(self.task_id, item_id, state.run_id)
+        given = f"`{answer.choice}`" if answer.choice else "a comment"
+        lines = [f"# {stage.name}: {item_id}", "", work.item, ""]
+        lines.append(f"Operator's answer: {given}")
+        if answer.comment:
+            lines.extend(["", *(f"> {line}" for line in answer.comment.splitlines())])
+        self.service.complete(
+            self.task_id,
+            artifact="\n".join(lines) + "\n",
+            summary_for_next=(
+                f"The operator answered {given} for {item_id}"
+                + (" with a comment." if answer.comment else ".")
+            ),
+            caller_role=self.caller_role,
+        )
+        # The stage is committed; only now does the answer leave the sheet, so
+        # a cut here leaves a stale entry that the next apply drops.
+        self.sheet.remove(state.run_id, item_id)
+
+    def record_pause(self) -> None:
+        """The operator said they are done for now, on the stage now open."""
+        state, snapshot = self.load()
+        plan = snapshot.plan
+        if state.cursor < len(plan.items) and state.active_item_id and (
+            plan.items[state.cursor].interactive
+        ):
+            self.service.interact(
+                self.task_id, pause=True, caller_role=self.caller_role
+            )
+
+    def result(
+        self, outcome: WaitOutcome | None, applied: tuple[str, ...]
+    ) -> OperatorPageResult:
+        state, snapshot = self.load()
+        rows = self.rows(state, snapshot)
+        return OperatorPageResult(
+            outcome,
+            applied,
+            sum(1 for row in rows if row.answered),
+            len(rows),
+            state.operator_paused,
+            tuple(self.documents),
+        )
+
+
+def run_operator_page(
+    service: WorkflowService,
+    task_id: str,
+    *,
+    timeout: float,
+    open_browser: Callable[[str], object] | None,
+    caller_role: CallerRole | None = None,
+) -> OperatorPageResult:
+    """Apply leftover answers, serve the page until the wait ends, apply again."""
+    session = _Session(service, task_id, caller_role)
+    applied = session.apply_pending()
+    state, snapshot = session.load()
+    try:
+        session.current_ui_stage(state, snapshot)
+    except StateError:
+        if applied:
+            # Applying moved the task past its ``ui`` stages; nothing to wait for.
+            return session.result(None, applied)
+        raise
+    outcome = serve_operator_page(
+        port=operator_page_port(task_id),
+        state=session.page_state,
+        act=session.act,
+        timeout=timeout,
+        open_browser=open_browser,
+    )
+    applied += session.apply_pending()
+    if outcome == "paused":
+        session.record_pause()
+    return session.result(outcome, applied)
+
+
+def _outcome_text(answer: Answer) -> str:
+    """The operator's answer as an item's actual solution."""
+    if answer.choice and answer.comment:
+        return f"{answer.choice}: {answer.comment}"
+    return answer.choice or answer.comment
+
+
+def _now() -> str:
+    stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return stamp.replace("+00:00", "Z")

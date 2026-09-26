@@ -1,0 +1,457 @@
+# Examples
+
+Each example is a complete `workflows.yaml`, unless it says otherwise, and every
+one is loaded and compiled by the test suite. They are ordered from the simplest
+to the most involved and each one introduces a different control or behaviour.
+Agent-facing text is deliberately short; in a real project the descriptions
+carry the instructions your agents need.
+
+Run any of them with:
+
+```console
+./ww discover
+./ww start TASK-1 --workflow <name> --agent codex --init-artifact "<requirements>" --role manager
+```
+
+## 1. A linear workflow
+
+The smallest useful workflow. Every step is plain agent work, the implicit
+`init` step records the requirements first, and each step produces an artifact.
+
+```yaml
+workflows:
+  - name: task
+    description: Implement a small change end to end.
+    steps:
+      - develop: Implement the requested change.
+      - test: Run the tests and fix what fails.
+      - document: Update the documentation the change affects.
+```
+
+## 2. Hooks and reusable handlers
+
+Handlers are defined once and attached to lifecycle phases. Global hooks apply
+to every workflow, workflow hooks to one workflow, and step hooks to one step.
+Automatic handlers, here `argv` commands, run by ww itself; the agent never
+executes them. `assert` checks the command's output.
+
+```yaml
+handlers:
+  - name: lint
+    description: Run the linters.
+    argv: [ruff, check, src]
+  - name: verify-clean
+    argv: [printf, clean]
+    assert:
+      operator: eq
+      expected: clean
+  - name: announce
+    description: Tell the team what changed.
+
+hooks:
+  before_start_workflow:
+    - workflows: [task]
+      handlers:
+        - verify-clean: ~
+  before_complete_workflow:
+    - handlers:
+        - announce: ~
+
+workflows:
+  - name: task
+    hooks:
+      before_in_progress:
+        - steps: [develop]
+          handlers:
+            - lint: ~
+    steps:
+      - develop: Implement the change.
+        hooks:
+          after_complete:
+            - lint: ~
+      - review: Review the change.
+```
+
+## 3. Shell commands with arguments, environment, and provided values
+
+Shell source never interpolates directly; data goes through `args` and `env`.
+`provide` asks the agent for values that later automatic steps consume, and
+`{{...}}` interpolates them. `artifact: false` skips the artifact for a step
+whose result is only its provided value.
+
+```yaml
+workflows:
+  - name: release
+    steps:
+      - pick-version: Decide the next version number.
+        artifact: false
+        provide:
+          - version: The next semantic version, for example 1.4.0.
+      - tag:
+        shell: 'git tag -a "v$1" -m "$MESSAGE"'
+        args: ["{{version}}"]
+        env:
+          MESSAGE: "Release {{version}} for {{__task_id}}"
+      - notes: Write the release notes for {{version}}.
+```
+
+## 4. Modes, profiles, and execution settings
+
+Modes are selectable guidance, profiles describe how an agent should behave,
+and `agent`, `model`, and `reasoning` are advisory requests the manager sees in
+the `auto` runtime. `subagents: false` keeps a step in the managing session.
+
+```yaml
+modes:
+  - economy: Use as few tokens as possible and keep artifacts short.
+  - thorough: Prefer completeness over speed; verify every claim.
+
+profiles:
+  developer: Prefer small, well-tested changes and explain trade-offs briefly.
+  reviewer: Look for defects and missing tests; do not restyle code.
+
+workflows:
+  - name: feature
+    modes: [economy]
+    profile: developer
+    model: opus
+    reasoning: high
+    steps:
+      - plan: Outline the change before touching code.
+        subagents: false
+        model: cheapest
+        reasoning: low
+      - implement: Implement the plan.
+      - review: Review the implementation.
+        profile: reviewer
+        agent: claudecode
+```
+
+## 5. Skills, slash commands, and MCP actions
+
+A step can require a discovered agent skill or slash command instead of plain
+prompt text, or address an MCP connection. The examples below need a
+`review-code` skill and a `ship` slash command in the agent's directory.
+
+```yaml
+workflows:
+  - name: ship
+    steps:
+      - review-code: Review the change with the project's review skill.
+        skill: true
+      - create-ticket: Create the release ticket and record its key.
+        mcp: jira
+        provide:
+          - ticket: The key of the created ticket.
+      - ship: Run the release command.
+        slash_command: true
+```
+
+## 6. Nested steps and artifact dependencies
+
+`steps` groups related work under a parent step that becomes in progress with
+its first child and completes with its last. `depends_on` hands an earlier
+sibling's artifact to a later one, at the same nesting level.
+
+```yaml
+workflows:
+  - name: migration
+    steps:
+      - analyze: Analyze the current schema and list the required changes.
+      - implement:
+        steps:
+          - write-migration: Write the migration.
+          - adapt-code: Adapt the code that reads the changed tables.
+            depends_on: write-migration
+      - verify: Run the migration against a scratch database.
+        depends_on: analyze
+```
+
+## 7. Loops with break and continue
+
+A `loop` repeats its body until a worker breaks it or the iteration limit is
+reached. `break` and `continue` are natural-language conditions the worker
+evaluates after doing the step. `loop_max_times` overrides the project default.
+
+```yaml
+workflows:
+  - name: review-and-fix
+    steps:
+      - implement: Implement the change.
+      - polish:
+        loop_max_times: 4
+        loop:
+          - review: Review the current state of the change.
+            break: There are no meaningful findings left.
+          - triage: Decide whether the findings are worth fixing now.
+            continue: The findings are cosmetic and can be batched into the next review.
+          - fix: Fix the findings.
+```
+
+## 8. Assessments
+
+An assessment asks the agent for a decision and selects a subtree by its named
+outcome. The compact form only continues or finishes the workflow. A workflow
+holds at most one `assess` step, because the name is reserved.
+
+```yaml
+handlers:
+  - name: refactor
+    description: Refactor the modules the assessment named.
+
+workflows:
+  - name: maintenance
+    steps:
+      - assess:
+          question: Does the recent development warrant refactoring?
+          outcomes:
+            positive:
+              handler: refactor
+            negative:
+              steps:
+                - record: Record that no refactoring is needed now.
+            mixed:
+              steps:
+                - investigate: Gather the missing evidence.
+                - decide: Decide and record the outcome.
+
+  - name: follow-ups
+    steps:
+      - assess: Are there follow-up tasks worth opening?
+      - open-follow-ups: Open the follow-up tasks.
+```
+
+## 9. Items: split work into pieces
+
+An `items` step collects work items, here review findings, and then runs stages
+for each of them. The bare form gets one built-in stage per item. The string
+form gives splitting guidance. `item_assignment: per_item` keeps one worker for
+all stages of an item in the `auto` runtime.
+
+```yaml
+workflows:
+  - name: quick-fixes
+    steps:
+      - collect: Review the pull request.
+        items: One item per unresolved review thread; use the thread ID as the item ID.
+
+  - name: review-feedback
+    steps:
+      - collect: Review the pull request.
+        items:
+          description: One item per review finding.
+          item_assignment: per_item
+          model: sonnet
+          steps:
+            - analyze: Analyze this finding.
+              process_item: ~
+            - fix: Resolve this finding.
+              resolve_item: ~
+            - reply: Reply in the finding's thread and resolve it.
+              report_item: ~
+```
+
+## 10. A handoff workflow that chooses the next one
+
+A workflow with `handoff: true` ends in a transition step, `workflow` beside
+the step name, to another workflow, which continues as the next run of the same
+task. This is how one entry point routes a request to the right process.
+
+```yaml
+workflows:
+  - name: route
+    handoff: true
+    steps:
+      - classify: Decide whether this request is a bug fix or a feature.
+        artifact: false
+        provide:
+          - workflow: One of the workflows listed in {{__workflows}}, other than route.
+      - route: ~
+        workflow: "{{workflow}}"
+
+  - name: bugfix
+    steps:
+      - reproduce: Reproduce the bug.
+      - fix: Fix it and add a regression test.
+
+  - name: feature
+    steps:
+      - implement: Implement the feature.
+      - test: Test it.
+```
+
+## 11. Parent and child tasks
+
+A `children` step collects independent pieces of work and `workflow_per_child`
+runs a workflow for each as its own task under the parent. Children run one at
+a time; the parent completes when the last child does.
+
+```yaml
+workflows:
+  - name: epic
+    steps:
+      - split: Split the epic into independent stories.
+        children: ~
+      - execute:
+        workflow_per_child: story
+      - summarize: Summarize what the stories delivered.
+
+  - name: story
+    steps:
+      - implement: Implement this story.
+      - test: Test it.
+```
+
+## 12. Children that bind their own Jira IDs
+
+When the child workflow's first step provides `task_id`, each child obtains its
+own external ID from that step when it starts. The parent's collection step
+tells the agent not to pass `--id`. The same first step lets the parent itself
+get its ID when started without one.
+
+```yaml
+workflows:
+  - name: epic
+    steps:
+      - create-epic: Create the Jira epic and return its key.
+        mcp: jira
+        provide:
+          - task_id: The epic key returned by Jira.
+      - split: Split the epic into stories.
+        children: ~
+      - execute:
+        workflow_per_child: story
+
+  - name: story
+    steps:
+      - create-story: Create the Jira story for this child and return its key.
+        mcp: jira
+        provide:
+          - task_id: The story key returned by Jira.
+      - implement: Implement {{__task_id}}.
+```
+
+## 13. Saved metadata and project-scoped values
+
+`update_metadata` persists values an agent produces. Task scope stays with the
+task; project scope is shared by every task and read back through
+`{{project_metadata.<path>}}`.
+
+```yaml
+workflows:
+  - name: dependency-update
+    steps:
+      - update: Update the dependencies and note the highest risk change.
+        update_metadata:
+          - riskiest_change: The dependency whose update is most likely to break something.
+            key: dependencies.riskiest_change
+          - last_update: Today's date in YYYY-MM-DD format.
+            key: dependencies.last_update
+            scope: project
+      - verify: Pay special attention to {{metadata.dependencies.riskiest_change}}.
+```
+
+## 14. Git branches, commits, and worktrees
+
+Git integration is the bundled `ww/git` extension. Its handlers are referenced
+like any other, and its settings live in `agentic-workflows.json`.
+
+```yaml
+hooks:
+  before_start_workflow:
+    - handlers:
+        - ext/ww/git/handlers:is-git-clean: ~
+        - ext/ww/git/handlers:start-task-branch: ~
+        - ext/ww/git/handlers:create-worktree: ~
+  before_complete_workflow:
+    - handlers:
+        - ext/ww/git/handlers:git-commit: ~
+        - ext/ww/git/handlers:remove-task-worktree: ~
+
+workflows:
+  - name: task
+    modes: [ext/ww/git/modes:conventional-commits]
+    steps:
+      - develop: Implement the change in the task worktree.
+      - test: Run the tests.
+```
+
+```json
+{
+  "enabled": true,
+  "loop_max_times": 3,
+  "extensions": {
+    "ww/git": {
+      "commit_format": "{{task_id}}: {{commit_message}}",
+      "base_branch": "main",
+      "base_branches": {"hotfix": "release"},
+      "use_separate_branch": true,
+      "branch_name_formats": {
+        "default": "feature/{{task_id}}",
+        "hotfix": "hotfix/{{task_id}}"
+      },
+      "worktrees": true,
+      "worktree_dir": "./ww-worktrees",
+      "worktree_name_format": "{{task_id}}"
+    }
+  }
+}
+```
+
+## 15. One ww instance over several repositories
+
+With `projects` in `agentic-workflows.json`, the ww root is a workspace above
+the repositories. `start --project` and `add-child --project` choose where a
+task works, and the git extension follows.
+
+```json
+{
+  "enabled": true,
+  "projects": [
+    {"name": "backend", "path": "./backend", "description": "Python API service."},
+    {"name": "frontend", "path": "./frontend", "description": "React web client."}
+  ],
+  "extensions": {
+    "ww/git": {
+      "use_separate_branch": true,
+      "base_branch": "main",
+      "project_base_branches": {"frontend": "master"},
+      "branch_name_formats": {"default": "feature/{{task_id}}"}
+    }
+  }
+}
+```
+
+```yaml
+hooks:
+  before_start_workflow:
+    - workflows: [feature]
+      handlers:
+        - ext/ww/git/handlers:is-git-clean: ~
+        - ext/ww/git/handlers:start-task-branch: ~
+  before_complete_workflow:
+    - workflows: [feature]
+      handlers:
+        - ext/ww/git/handlers:git-commit: ~
+        - ext/ww/git/handlers:return-to-base-branch: ~
+
+workflows:
+  - name: change
+    description: A change that may touch several repositories.
+    steps:
+      - split: Split the change into one child per repository.
+        children: ~
+      - execute:
+        workflow_per_child: feature
+
+  - name: feature
+    steps:
+      - develop: Implement this part in {{__project_dir}}.
+      - test: Run this repository's tests.
+```
+
+```console
+./ww start CHANGE-1 --workflow change --agent codex --init-artifact "..." --role manager
+./ww add-child CHANGE-1 --id api --description "API part" --project backend
+./ww add-child CHANGE-1 --id web --description "Web part" --project frontend
+```

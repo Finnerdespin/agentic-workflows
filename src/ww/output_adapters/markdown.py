@@ -1,0 +1,1315 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Human-first rendering for normalized execution instructions."""
+
+from __future__ import annotations
+
+import os
+import json
+import shlex
+import shutil
+from pathlib import Path
+
+from ww.agents import WAIT_VARIABLE, wait_mechanism
+from ww.children import ChildTask
+from ww.instructions import Instruction, InteractCommands
+from ww.instructions.commands import (
+    add_item_command,
+    artifacts_command,
+    instruction_command,
+    next_command,
+    remove_item_command,
+    reword_item_command,
+    set_item_fields_command,
+)
+from ww.instructions.policy import Audience, audience
+from ww.output_adapters.base import OutputAdapter
+from ww.output_adapters.terminal import initialization_progress, terminal_accent
+from ww.results import InitializationResult, ResetResult
+
+Lines = list[str]
+
+
+class MarkdownOutputAdapter(OutputAdapter):
+    def render_instruction(self, instruction: Instruction) -> str:
+        if instruction.status == "task_summary":
+            return _document(_task_summary(instruction))
+        lines = _header(instruction)
+        if instruction.status == "completed":
+            _completed(lines, instruction)
+            return _document(lines)
+        if instruction.status == "abandoned":
+            lines.extend(
+                [
+                    "## Run abandoned",
+                    "",
+                    f"Run `{instruction.run_id}` was abandoned by a later start of "
+                    "the workflow and is kept as history. Nothing is to be done "
+                    "in it; work on the task's current run.",
+                ]
+            )
+            return _document(lines)
+        if _continues_assignment(instruction):
+            return _document(_next_stage(lines, instruction))
+        _heading(lines, instruction)
+        _worker_selection(lines, instruction)
+        _assignment_preview(lines, instruction)
+        delegating = audience(instruction) is Audience.MANAGER_DELEGATING
+        if delegating and instruction.subagents:
+            _worker_bootstrap(lines, instruction)
+            return _document(lines)
+        _assignment_scope(lines, instruction)
+        _working_directory(lines, instruction)
+        _profile(lines, instruction)
+        _task_requirements(lines, instruction)
+        _previous_step_result(lines, instruction)
+        _work(lines, instruction)
+        _item_fields(lines, instruction)
+        _stored_items(lines, instruction)
+        _interaction(lines, instruction)
+        _documents(lines, instruction)
+        _run_handovers(lines, instruction)
+        _input_context(lines, instruction)
+        _loop_limit_recovery(lines, instruction)
+        _next_steps(lines, instruction)
+        _loop_outcome(lines, instruction)
+        _previous_artifacts(lines, instruction)
+        _error(lines, instruction)
+        _failure(lines, instruction)
+        _interrupted(lines, instruction)
+        if instruction.artifact:
+            lines.extend(["", f"Artifact: `{instruction.artifact}`"])
+        _continuation(lines, instruction)
+        return _document(lines)
+
+    def render_reset(self, result: ResetResult) -> str:
+        if result.removed:
+            return (
+                f"Task {result.task_id} was reset. Its state, plan, artifacts, "
+                "and handoff marker were removed.\n"
+            )
+        return f"Task {result.task_id} was not found; nothing was removed.\n"
+
+    def render_initialization(self, result: InitializationResult) -> str:
+        lines = [
+            f"{initialization_progress(100)} ww setup completed successfully in: "
+            f"{result.root}"
+        ]
+        for title, entries in (
+            ("Created or restored:", result.created),
+            ("Already present and preserved:", result.preserved),
+            (
+                "Setup notes:",
+                tuple(
+                    action
+                    for action in result.actions
+                    if action != "Define at least one workflow in workflows.yaml."
+                ),
+            ),
+        ):
+            if entries:
+                lines.extend(["", title, *(f"- {item}" for item in entries)])
+        if _git_extension_active(result.root):
+            lines.extend(
+                [
+                    "",
+                    terminal_accent("Git support is enabled"),
+                    "  The ww/git extension is configured in agentic-workflows.json",
+                    "  with its default settings. See:",
+                    "  https://github.com/from-developers-for-developers/agentic-workflows/blob/main/documentation/features.md#configuring-one",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                terminal_accent("You're almost there!"),
+                "",
+                "  " + terminal_accent("1. Create your first workflow"),
+                "     Define the steps in workflows.yaml.",
+                "",
+                "  " + terminal_accent("2. Start developing with your agent"),
+                "     For example, type:",
+                "",
+                "     /ww implement a user sign-in page",
+                "",
+                "  " + terminal_accent("Run commands manually"),
+                "     Use the project launcher for any ww command:",
+                "",
+                "     ./ww workflows",
+                "",
+                "  " + terminal_accent("Permission tip"),
+                "     To avoid repeated confirmation prompts, allow the ww command",
+                "     you use in your agent's permissions:",
+                "",
+                "     ww-agentic-workflows",
+                "     ww                 (when the shortcut exists)",
+                "     ./ww",
+                "",
+                *_initialization_shortcut(),
+                terminal_accent("Documentation"),
+                "",
+                "  " + terminal_accent("README"),
+                "    https://github.com/from-developers-for-developers/agentic-workflows",
+                "",
+                "  " + terminal_accent("Workflow specification"),
+                "    https://github.com/from-developers-for-developers/agentic-workflows/blob/main/documentation/specification.md",
+                "",
+                "  " + terminal_accent("Examples"),
+                "    https://github.com/from-developers-for-developers/agentic-workflows/blob/main/documentation/examples.md",
+                "",
+                "  " + terminal_accent("All features"),
+                "    https://github.com/from-developers-for-developers/agentic-workflows/blob/main/documentation/features.md",
+            ]
+        )
+        return _document(lines)
+
+
+def _git_extension_active(root: str) -> bool:
+    try:
+        config = json.loads((Path(root) / "agentic-workflows.json").read_text())
+        extensions = config.get("extensions", {})
+        return isinstance(extensions, dict) and isinstance(
+            extensions.get("ww/git"), dict
+        )
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return False
+
+
+def _initialization_shortcut() -> Lines:
+    lines = ["  " + terminal_accent("Optional global shortcut")]
+    executable = shutil.which("ww-agentic-workflows")
+    if executable:
+        source = Path(executable).absolute()
+        target = source.with_name("ww")
+        if os.path.lexists(target):
+            lines.extend(
+                [f"     A ww shortcut or executable already exists: {target}", ""]
+            )
+            return lines
+        lines.extend(
+            [
+                "     Link the installed executable as ww in the same PATH directory:",
+                "",
+                f"     ln -s {shlex.quote(str(source))} {shlex.quote(str(target))}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "     After installing ww-agentic-workflows, create a ww shortcut:",
+                "",
+                "     ww_bin=$(command -v ww-agentic-workflows)",
+                '     ln -s "$ww_bin" "$(dirname "$ww_bin")/ww"',
+            ]
+        )
+    lines.extend(["", "     Then run: ww workflows", ""])
+    return lines
+
+
+def _document(lines: Lines) -> str:
+    return "\n".join(lines) + "\n"
+
+
+def _task_summary(instruction: Instruction) -> Lines:
+    lines = [
+        f"# {instruction.task_id}",
+        "",
+        "> Generated by `ww`. This is the authoritative status for this task.",
+        "",
+    ]
+    if instruction.manager_intro:
+        lines.extend(_manager_intro())
+    lines.extend(["## Manager: choose a workflow run", ""])
+    for run in instruction.task_runs:
+        summary = f" — {run.summary}" if run.summary else ""
+        lines.append(f"- `{run.run_id}` · `{run.workflow}` · {run.status}{summary}")
+    lines.extend(
+        [
+            "",
+            "Use `"
+            + instruction_command(instruction.task_id, "<run-id>", role="manager")
+            + "` for one run's detailed status.",
+        ]
+    )
+    return lines
+
+
+def _header(instruction: Instruction) -> Lines:
+    lines = [
+        f"# {instruction.task_id} · {instruction.workflow}",
+        "",
+        "> Generated by `ww`. This is the authoritative instruction for "
+        "the current task state.",
+    ]
+    if (
+        instruction.completion_registered
+        and instruction.error is None
+        and instruction.status not in {"failed", "interrupted"}
+    ):
+        lines.extend(["> Completion recorded successfully by `ww`.", ""])
+    else:
+        lines.append("")
+    if instruction.manager_intro:
+        lines.extend(_manager_intro())
+    return lines
+
+
+def _completed(lines: Lines, instruction: Instruction) -> None:
+    lines.extend(
+        [
+            "## Manager: workflow complete",
+            "",
+            "All agent work and automated handlers completed successfully.",
+        ]
+    )
+    if instruction.handoff:
+        lines.extend(["", f"Handoff: `{instruction.handoff}`"])
+    if instruction.control == "handoff_manager":
+        lines.extend(["", "Control is with the manager for final reporting."])
+
+
+def _heading(lines: Lines, instruction: Instruction) -> None:
+    heading = f"{_role(instruction)}: {_action_heading(instruction)}"
+    if instruction.item_status == "awaiting_input" and (
+        audience(instruction) is not Audience.MANAGER_DELEGATING
+    ):
+        # A delegating manager keeps the "delegate the assignment" heading:
+        # the worker it selects is the one who provides the input.
+        heading = f"{_role(instruction)}: provide required input"
+    if instruction.item_status == "failed":
+        heading = "Manager: retry or force-skip the failed automatic handler"
+    if instruction.item_status == "interrupted":
+        heading = "Manager: resolve the interrupted automatic handler"
+    if instruction.operation_id and instruction.item_status == "in_progress":
+        heading = "Manager: resolve the active automatic handler"
+    lines.extend([f"## {heading}", ""])
+    lines.extend(_role_instruction(instruction))
+
+
+def _worker_selection(lines: Lines, instruction: Instruction) -> None:
+    if not (
+        instruction.workflow_runtime == "auto"
+        and instruction.next_role == "worker"
+        and (
+            instruction.requested_agent
+            or instruction.requested_model
+            or instruction.requested_reasoning
+            or instruction.requested_profile
+        )
+    ):
+        return
+    lines.extend(
+        [
+            "Requested worker:",
+            "",
+            f"- Agent: `{instruction.requested_agent or 'auto'}` (advisory)",
+            f"- Model: `{instruction.requested_model or 'auto'}`",
+            f"- Reasoning: `{instruction.requested_reasoning or 'auto'}`",
+            f"- Profile: `{instruction.requested_profile or 'none'}`",
+            "",
+        ]
+    )
+    if (
+        instruction.selected_agent
+        or instruction.selected_model
+        or instruction.selected_reasoning
+    ):
+        lines.extend(
+            [
+                "Selected worker:",
+                "",
+                f"- Agent: `{instruction.selected_agent or 'unknown'}`",
+                f"- Model: `{instruction.selected_model or 'unknown'}`",
+                f"- Reasoning: `{instruction.selected_reasoning or 'unknown'}`",
+                "",
+            ]
+        )
+
+
+def _assignment_preview(lines: Lines, instruction: Instruction) -> None:
+    preview = instruction.assignment_preview
+    if not preview or audience(instruction) is Audience.WORKER_RETURNING:
+        return
+    if "selection_item_name" in preview:
+        lines.extend(
+            [
+                "",
+                "### Upcoming assignment",
+                "",
+                f"Selection item: `{preview['selection_item_name']}`  ",
+                f"Requested agent: `{preview['requested_agent']}`  ",
+                f"Requested model: `{preview['requested_model']}`  ",
+                f"Requested reasoning: `{preview['requested_reasoning']}`  ",
+                f"Requested profile: `{preview['requested_profile'] or 'none'}`",
+            ]
+        )
+        scope = preview.get("item_scope") or preview.get("loop_scope")
+        if isinstance(scope, dict):
+            lines.extend(["", f"Scope: {_scope_summary(scope)}"])
+    else:
+        coordinator = "coordinator_item_id" in preview
+        title = "Coordinator work" if coordinator else "Upcoming assignment"
+        lines.extend(["", f"### {title}", "", str(preview["message"])])
+
+
+def _scope_summary(scope: dict[str, object]) -> str:
+    stages = ", ".join(f"`{name}`" for name in _strings(scope["stages"]))
+    if "loop_assignment" in scope:
+        return (
+            f"one worker performs these steps ({stages}) of one round of the "
+            f"`{scope['loop']}` loop."
+        )
+    item_ids = _strings(scope["item_ids"])
+    if scope["item_assignment"] == "all_items":
+        return (
+            f"one worker performs every stage ({stages}) of all {len(item_ids)} items."
+        )
+    return f"one worker performs every stage ({stages}) of item `{item_ids[0]}`."
+
+
+def _strings(value: object) -> list[str]:
+    return [str(entry) for entry in value] if isinstance(value, list) else []
+
+
+def _assignment_scope(lines: Lines, instruction: Instruction) -> None:
+    scope = instruction.assignment_scope
+    if scope is None or audience(instruction) is not Audience.WORKER:
+        return
+    _append_section(lines, "Assignment scope")
+    unit = "step" if "loop_assignment" in scope else "stage"
+    lines.extend(
+        [
+            f"In this assignment, {_scope_summary(scope)}",
+            "",
+            f"Do one {unit} at a time and complete each with its own worker "
+            f"completion command; `ww` replies with the next {unit} straight "
+            f"away. Do not start a later {unit} early. Keep going until `ww` "
+            "says control returns to the manager.",
+        ]
+    )
+
+
+def _continues_assignment(instruction: Instruction) -> bool:
+    """A worker moving to the next stage of the item assignment it already holds."""
+    return (
+        instruction.continues_assignment
+        and instruction.completion_registered
+        and instruction.item_status == "in_progress"
+        and audience(instruction) is Audience.WORKER
+    )
+
+
+def _next_stage(lines: Lines, instruction: Instruction) -> Lines:
+    """The compact instruction for a later stage of the same assignment.
+
+    The worker already holds the role, workspace, profile, and item or loop
+    context, so only the new stage's work and its completion command are
+    repeated.
+    """
+    lines.extend(
+        [
+            f"## Worker: next stage, `{instruction.item_name}`",
+            "",
+            "Continue in the same assignment.",
+        ]
+    )
+    _work(lines, instruction)
+    _documents(lines, instruction)
+    _loop_outcome(lines, instruction)
+    _continuation(lines, instruction)
+    return lines
+
+
+def _worker_bootstrap(lines: Lines, instruction: Instruction) -> None:
+    _append_section(lines, "Worker bootstrap")
+    lines.extend(
+        [
+            "Pass only this command to the selected worker:",
+            "",
+            "```console",
+            instruction_command(instruction.task_id, instruction.run_id, role="worker"),
+            "```",
+            "",
+            "The worker runs it to receive the complete, role-specific "
+            "assignment. Do not add task details or commentary.",
+        ]
+    )
+
+
+def _working_directory(lines: Lines, instruction: Instruction) -> None:
+    if instruction.working_directory:
+        _append_section(lines, "Working directory")
+        lines.extend(
+            [
+                "Before doing any task work, switch to this task workspace "
+                "and keep it as your current directory:",
+                "",
+                "```console",
+                f"cd {shlex.quote(instruction.working_directory)}",
+                "```",
+            ]
+        )
+
+
+def _profile(lines: Lines, instruction: Instruction) -> None:
+    if instruction.item_status == "in_progress" and instruction.profile_instruction:
+        lines.extend(["", "### Profile", "", instruction.profile_instruction])
+
+
+def _task_requirements(lines: Lines, instruction: Instruction) -> None:
+    """Repeat the saved requirements, so the user's wording reaches the worker."""
+    if instruction.item_status != "in_progress" or not instruction.task_requirements:
+        return
+    _append_section(lines, "Task requirements")
+    lines.append(instruction.task_requirements)
+
+
+def _previous_step_result(lines: Lines, instruction: Instruction) -> None:
+    """Hand the previous step's summary and artifact reference to this step."""
+    if instruction.item_status != "in_progress" or not instruction.previous_step:
+        return
+    _append_section(lines, "Previous step result")
+    if instruction.previous_step_summary:
+        lines.extend(
+            [
+                f"The `{instruction.previous_step}` step left this summary for you:",
+                "",
+                *_blockquote(instruction.previous_step_summary),
+                "",
+            ]
+        )
+    lines.append(
+        f"Its full result is the artifact `{instruction.previous_step_artifact}`; "
+        "read it when the summary is not enough."
+    )
+
+
+def _work(lines: Lines, instruction: Instruction) -> None:
+    if not instruction.action_text:
+        return
+    _append_section(
+        lines,
+        "Loop limit reached" if instruction.loop_limit_reached else "Work instruction",
+    )
+    if instruction.ui and instruction.item_status == "in_progress":
+        lines.extend(
+            [
+                "> **Operator page.** This stage is answered by the operator on "
+                "the operator page and completed by ww from the answer. Do not "
+                "present the item or ask the operator yourself; read the "
+                "Operator page section below and run its command.",
+                "",
+            ]
+        )
+    if instruction.gate_prompt:
+        lines.extend(
+            [
+                "Before doing the work, evaluate this decision gate:",
+                "",
+                f"> **Decision gate:** {instruction.gate_prompt}",
+                "> Reason about this first. Perform the work only if you "
+                "conclude that it is necessary.",
+                "",
+                "If the gate passes, perform this work:",
+                "",
+                *_blockquote(instruction.action_text),
+            ]
+        )
+    else:
+        lines.append(instruction.action_text)
+    _loop_round(lines, instruction)
+
+
+def _loop_round(lines: Lines, instruction: Instruction) -> None:
+    """Tell a loop body step which round it is in and what that round covers."""
+    if (
+        instruction.loop_name is None
+        or instruction.loop_iteration is None
+        or instruction.is_loop_control
+    ):
+        return
+    name = instruction.loop_name
+    if instruction.loop_iteration <= 1:
+        lines.extend(
+            [
+                "",
+                f"This is the first round of the `{name}` loop. It builds on the "
+                "work of the steps before the loop.",
+            ]
+        )
+        return
+    lines.extend(
+        [
+            "",
+            f"This is round {instruction.loop_iteration} of the `{name}` loop, "
+            f"limit {instruction.loop_max_times}. Concentrate on the work done "
+            "in the previous rounds of this loop, not on the whole task. Their "
+            "results are the artifacts in the loop's earlier iteration "
+            "directories; list them with:",
+            "",
+            "```console",
+            artifacts_command(instruction.task_id, instruction.run_id),
+            "```",
+        ]
+    )
+
+
+def _item_fields(lines: Lines, instruction: Instruction) -> None:
+    """Custom item fields: what this step must set, and the flow's rules."""
+    if instruction.item_status != "in_progress":
+        return
+    rules = instruction.item_identity or instruction.item_unique
+    if not instruction.required_item_fields and not rules:
+        return
+    _append_section(lines, "Item fields")
+    task_id = instruction.task_id
+    if instruction.required_item_fields:
+        target = (
+            "every collected item" if instruction.collects_items else "this step's item"
+        )
+        lines.extend(
+            [
+                f"Set these custom fields on {target} before completing; "
+                "completion is refused while any is empty. Several go in one "
+                "command:",
+                "",
+            ]
+        )
+        lines.extend(
+            f"- `{field.name}`"
+            + (f" — {field.description}" if field.description else "")
+            for field in instruction.required_item_fields
+        )
+        lines.extend(["", "```console", set_item_fields_command(task_id), "```"])
+    if rules:
+        lines.append("")
+        if instruction.item_identity:
+            lines.append(
+                f"A new item must carry `{instruction.item_identity}`; `add-item` "
+                "refuses one without it:"
+            )
+            command = add_item_command(task_id, instruction.item_identity)
+            lines.extend(["", "```console", command, "```"])
+        if instruction.item_unique:
+            lines.extend(
+                [
+                    "",
+                    "Across "
+                    + ", ".join(f"`{n}`" for n in instruction.item_unique)
+                    + " a value may appear once over all items, in this run and in "
+                    "the task's stored items; ww refuses a duplicate and names the "
+                    "item that holds it. Look an item up by a field with "
+                    f"`{_command_by(task_id)}`.",
+                ]
+            )
+
+
+def _command_by(task_id: str) -> str:
+    return f"./ww item {task_id} --by <name>=<value>"
+
+
+def _stored_items(lines: Lines, instruction: Instruction) -> None:
+    """A shared item flow's collection: reconcile the stored items."""
+    if instruction.item_status != "in_progress" or not instruction.shared_items:
+        return
+    _append_section(lines, "Stored items")
+    task_id = instruction.task_id
+    if not instruction.stored_items:
+        lines.extend(
+            [
+                "This task shares its items across runs, and none are stored yet: "
+                "split as instructed above. Every later run starts from the items "
+                "you record now.",
+            ]
+        )
+        return
+    lines.extend(
+        [
+            "This task shares its items across runs. The items below were "
+            "collected in an earlier run and this run starts from them, with "
+            "their outcomes cleared. Do not split again: compare the source "
+            "with this list and make the list match it, adding what is new, "
+            "removing what is gone, and rewording what changed. Keep IDs "
+            "stable, so an item that changed is reworded, not replaced. Remove "
+            "an item only when it is gone from the source, never because it "
+            "was done: outcomes are per run, and every run keeps its own copy. "
+            "If nothing changed, complete the step as it is.",
+            "",
+        ]
+    )
+    lines.extend(
+        f"- `{item.id}`: {item.item}"
+        + (f" (refers to `{item.reference_to_id}`)" if item.reference_to_id else "")
+        + (
+            " [" + ", ".join(f"{k}={v}" for k, v in item.fields) + "]"
+            if item.fields
+            else ""
+        )
+        for item in instruction.stored_items
+    )
+    lines.extend(
+        [
+            "",
+            "```console",
+            add_item_command(task_id),
+            remove_item_command(task_id),
+            reword_item_command(task_id),
+            "```",
+        ]
+    )
+
+
+def _interaction(lines: Lines, instruction: Instruction) -> None:
+    """The contract of an interactive step: talk, record both sides, end."""
+    if instruction.item_status != "in_progress" or not instruction.interactive:
+        return
+    commands = instruction.interact_commands
+    if commands is None:  # pragma: no cover - the builder sets them together
+        raise ValueError("an interactive step needs its interact commands")
+    if instruction.ui:
+        _operator_page(lines, instruction, commands)
+        return
+    _append_section(lines, "Interaction with the operator")
+    if instruction.interaction_ended:
+        state = "The operator has ended this interaction; complete the step now."
+    elif instruction.operator_paused:
+        state = (
+            "The operator is done for now. Stop here: do not complete the step, "
+            "do not wait for them again, and do not delegate. The task keeps "
+            "this state; when the operator returns, show this page with "
+            f"`{commands.resume}` and go on."
+        )
+    elif instruction.interaction_entries:
+        count = instruction.interaction_entries
+        state = f"{count} entries recorded so far; the interaction is still open."
+    else:
+        state = "Nothing is recorded yet."
+    lines.extend(
+        [
+            "This step is a conversation with the operator, held here in this "
+            "session, because a delegated worker cannot talk to them. Present "
+            "the matter, ask, listen, and clarify. The operator runs no `ww` "
+            "command: read from their words whether the conversation goes on or "
+            "is finished. Record both sides as you go, each message verbatim:",
+            "",
+            "```console",
+            commands.operator,
+            commands.agent,
+            "```",
+            "",
+            "When the operator says it is finished, end the interaction, then "
+            "complete the step as usual. Completion is refused while it is open.",
+            "",
+            "```console",
+            commands.end,
+            "```",
+            "",
+            state,
+        ]
+    )
+    _choices(lines, instruction, commands.choice)
+    _conversation(lines, instruction)
+
+
+def _choices(lines: Lines, instruction: Instruction, choice: str) -> None:
+    if not instruction.choices:
+        return
+    lines.extend(["", "#### Choices", ""])
+    lines.extend(
+        f"{number}. `{option.label}`"
+        + (f" — {option.description}" if option.description else "")
+        for number, option in enumerate(instruction.choices, 1)
+    )
+    lines.extend(
+        [
+            "",
+            str(instruction.choice_mechanism),
+            "",
+            "Record the operator's pick before ending the interaction; it is "
+            "required, and a comment they add goes in as `--operator` text:",
+            "",
+            "```console",
+            choice,
+            "```",
+            "",
+            (
+                f"Chosen so far: `{instruction.chosen}`."
+                if instruction.chosen
+                else "Nothing chosen yet."
+            ),
+        ]
+    )
+
+
+def _operator_page(
+    lines: Lines, instruction: Instruction, commands: InteractCommands
+) -> None:
+    """A stage answered on the operator page: the agent waits, ww applies."""
+    _append_section(lines, "Operator page")
+    if instruction.operator_paused:
+        situation = (
+            "The operator is done for now. Stop here: do not wait again and do "
+            f"not delegate. When they return, show this page with "
+            f"`{commands.resume}` and wait again."
+        )
+    else:
+        situation = "Wait for the operator's answers:"
+    mechanism = wait_mechanism(instruction.agent)
+    command = commands.wait
+    if mechanism.wait_seconds is not None:
+        command = f"{WAIT_VARIABLE}={mechanism.wait_seconds} {command}"
+    lines.extend(
+        [
+            "This stage is answered on the operator page, a local page that "
+            "lists every item of the run. The operator answers each item there, "
+            "in any order, with a pick and a comment. You do not talk to the "
+            "operator for this stage and you do not complete it yourself: when "
+            "the wait ends, ww applies the answers, completing this stage and "
+            "every following item stage whose item was answered, in order, and "
+            "the command prints what it applied and what remains, after the "
+            "next page.",
+            "",
+            situation,
+            "",
+            "```console",
+            command,
+            "```",
+            "",
+            "The command returns when every item is answered, when the operator "
+            "says they are done for now or closes the page, or after a while "
+            "with nothing new. " + mechanism.instruction,
+        ]
+    )
+
+
+def _conversation(lines: Lines, instruction: Instruction) -> None:
+    if not instruction.conversation:
+        return
+    lines.extend(["", "#### Conversation so far", ""])
+    for entry in instruction.conversation:
+        lines.append(f"**{entry.speaker}** · {entry.at}")
+        lines.extend(_blockquote(entry.text))
+        lines.append("")
+    while lines and lines[-1] == "":
+        lines.pop()
+
+
+def _documents(lines: Lines, instruction: Instruction) -> None:
+    """Name the documents this step edits in place, the one exception under .ww."""
+    if instruction.item_status != "in_progress" or not instruction.documents:
+        return
+    _append_section(lines, "Documents to update")
+    lines.extend(
+        [
+            "Create or edit these files in place; they are the only files under "
+            "`.ww` you may write. Keep whatever format the document already has. "
+            "Each must exist when you complete, and `ww` then records that this "
+            "step updated it.",
+            "",
+        ]
+    )
+    for document in instruction.documents:
+        state = "exists" if document.exists else "does not exist yet; create it"
+        lines.append(f"- `{document.name}` at `{document.path}` ({state})")
+        if document.instruction:
+            lines.append(f"  {document.instruction}")
+
+
+def _run_handovers(lines: Lines, instruction: Instruction) -> None:
+    """Give the workflow summary its inputs: each step's own handover."""
+    if instruction.item_status != "in_progress" or not instruction.run_handovers:
+        return
+    _append_section(lines, "Step handovers of this run")
+    lines.extend(
+        [
+            "Build the summary from these handovers, in order; each names its "
+            "artifact for detail. State only what they, or the artifacts you "
+            "actually read, contain: no counts, test results, or statuses from "
+            "anywhere else, and nothing from other runs of this task.",
+            "",
+        ]
+    )
+    for handover in instruction.run_handovers:
+        text = handover.summary or "(no handover recorded)"
+        lines.append(f"- `{handover.step}`: {text} (artifact: `{handover.artifact}`)")
+
+
+def _input_context(lines: Lines, instruction: Instruction) -> None:
+    """Show a value-waiting handler the work its values are about."""
+    if instruction.item_status != "awaiting_input" or not instruction.input_context:
+        return
+    handler = instruction.item_name or "this handler"
+    _append_section(lines, "Work these values describe")
+    lines.extend(
+        [
+            f"Steps completed since `{handler}` last ran in this run, in order. "
+            "Base the values on this work only, not on earlier rounds or runs:",
+            "",
+        ]
+    )
+    for handover in instruction.input_context:
+        text = handover.summary or "(no handover recorded)"
+        lines.append(f"- `{handover.step}`: {text} (artifact: `{handover.artifact}`)")
+
+
+def _loop_limit_recovery(lines: Lines, instruction: Instruction) -> None:
+    """The operator's only way past a loop that reached its iteration limit."""
+    if not instruction.loop_limit_reached or not instruction.recovery_commands:
+        return
+    if instruction.workflow_runtime != "single" and instruction.caller_role == "worker":
+        return
+    _append_section(lines, "Operator recovery")
+    lines.append(
+        "Wait for the decision of the user, who is the `ww` operator. If they "
+        "resolve the remaining findings themselves, or accept them, run exactly "
+        "this to leave the loop and continue with the steps after it:"
+    )
+    for command in instruction.recovery_commands:
+        lines.extend(["", "```console", command.command, "```"])
+    lines.extend(
+        [
+            "",
+            "Do not run it without the operator's explicit approval. A further "
+            "iteration needs a higher `loop_max_times` in the configuration.",
+        ]
+    )
+
+
+def _next_steps(lines: Lines, instruction: Instruction) -> None:
+    if instruction.next_steps:
+        lines.extend(
+            ["", "Avoid duplicating work that is better handled by the next steps."]
+        )
+        _append_section(lines, "Next steps")
+        lines.extend(f"- {step}" for step in instruction.next_steps)
+
+
+def _loop_outcome(lines: Lines, instruction: Instruction) -> None:
+    if instruction.loop_break_prompt and instruction.loop_break_command:
+        _append_section(lines, "Loop outcome")
+        lines.extend(
+            [
+                f"Break condition: {instruction.loop_break_prompt}",
+                "",
+                "Condition met — break the loop:",
+                "",
+                "```console",
+                instruction.loop_break_command,
+                "```",
+                "",
+                "Condition not met — use the worker completion command below.",
+            ]
+        )
+    if instruction.loop_continue_prompt and instruction.loop_continue_command:
+        _append_section(lines, "Loop control")
+        lines.extend(
+            [
+                f"Continue condition: {instruction.loop_continue_prompt}",
+                "",
+                "Condition met — continue from the beginning of the loop:",
+                "",
+                "```console",
+                instruction.loop_continue_command,
+                "```",
+                "",
+                "Condition not met — use the worker completion command below.",
+            ]
+        )
+
+
+def _previous_artifacts(lines: Lines, instruction: Instruction) -> None:
+    if instruction.item_status == "in_progress" and instruction.has_previous_artifacts:
+        _append_section(lines, "Previous artifacts")
+        lines.extend(
+            [
+                "You may use artifacts from earlier completed steps. List them "
+                "as JSON with the command below; each entry's `path` is the "
+                "absolute file location, valid from any working directory:",
+                "",
+                "```console",
+                artifacts_command(instruction.task_id, instruction.run_id),
+                "```",
+            ]
+        )
+
+
+def _error(lines: Lines, instruction: Instruction) -> None:
+    if instruction.error:
+        _append_section(lines, "Error")
+        lines.append(instruction.error)
+        if instruction.result_saved is not None:
+            saved = "was" if instruction.result_saved else "was not"
+            lines.extend(["", f"The worker result {saved} saved before this stop."])
+
+
+def _failure(lines: Lines, instruction: Instruction) -> None:
+    if instruction.status != "failed":
+        return
+    child = _failed_child(instruction)
+    if child is None:
+        lines.extend(["", *_failed_handler_guidance(instruction)])
+        if instruction.recovery_commands and not (
+            instruction.workflow_runtime != "single"
+            and instruction.caller_role == "worker"
+        ):
+            _append_section(lines, "Operator recovery")
+            lines.append(
+                "Report the error above to the user, who is the `ww` operator, "
+                "and wait for their decision. Then run exactly the option they "
+                "chose:"
+            )
+            for command in instruction.recovery_commands:
+                purpose = (
+                    "to run the failed handler again, after the cause was fixed"
+                    if command.action == "retry"
+                    else "to skip it, only with the operator's explicit approval"
+                )
+                lines.extend(
+                    [
+                        "",
+                        f"{purpose.capitalize()}:",
+                        "",
+                        "```console",
+                        command.command,
+                        "```",
+                    ]
+                )
+        return
+    _append_section(lines, "Child task recovery")
+    lines.extend(
+        [
+            f"Child `{child.id}` failed. This requires an operator "
+            "decision. After addressing the child failure, resume its "
+            "workflow with:",
+            "",
+            "```console",
+            next_command(child.task_id),
+            "```",
+            "",
+            "When the child completes, `ww` resumes the parent workflow automatically.",
+        ]
+    )
+
+
+def _interrupted(lines: Lines, instruction: Instruction) -> None:
+    locked_next = f"```console\n{next_command(instruction.task_id)}\n```"
+    if instruction.item_status == "interrupted":
+        lines.extend(
+            [
+                "",
+                "The external outcome is unknown. Inspect it before choosing "
+                "whether to retry or attest success:",
+                "",
+                locked_next,
+                "",
+                "Use `next --retry` to replay it, or `next --force "
+                "--force-reason` to skip it after operator confirmation.",
+            ]
+        )
+        if instruction.recovery_commands:
+            lines.extend(
+                [
+                    "",
+                    "Recovery actions:",
+                    "",
+                    *(
+                        f"- `{recovery.action}`: `{recovery.command}`"
+                        for recovery in instruction.recovery_commands
+                    ),
+                ]
+            )
+    elif instruction.operation_id and instruction.item_status == "in_progress":
+        lines.extend(
+            [
+                "",
+                "This automatic operation is still marked in progress. "
+                "Use the locked next command if the process that owns "
+                "it is no longer running:",
+                "",
+                locked_next,
+            ]
+        )
+
+
+def _continuation(lines: Lines, instruction: Instruction) -> None:
+    if not instruction.continuation_command or instruction.status == "failed":
+        return
+    command = instruction.continuation_command
+    if instruction.status == "interrupted":
+        title = "Recover"
+    elif instruction.item_status == "pending" or instruction.manager_input:
+        title = "Manager command"
+    else:
+        title = "Worker completion command"
+    _append_section(lines, title)
+    if instruction.item_status == "pending":
+        worker_caller = (
+            instruction.workflow_runtime == "auto"
+            and instruction.caller_role == "worker"
+        )
+        if worker_caller:
+            lines.extend(["Return this response to the manager. The manager runs:", ""])
+        else:
+            lines.extend(["To continue the workflow, run:", ""])
+            preview = instruction.assignment_preview
+            if (
+                instruction.workflow_runtime == "auto"
+                and preview
+                and "selection_item_name" in preview
+            ):
+                command = next_command(
+                    instruction.task_id,
+                    selected_agent=str(preview["requested_agent"]),
+                    model=str(preview["requested_model"]),
+                    reasoning=str(preview["requested_reasoning"]),
+                )
+                lines.extend(
+                    [
+                        "These values follow the request. Replace them if "
+                        "you select a different available worker.",
+                        "",
+                    ]
+                )
+    elif instruction.manager_input:
+        lines.extend(["Provide the values and run:", ""])
+    elif instruction.next_role == "worker":
+        lines.extend(["When the work is finished, run:", ""])
+    if instruction.summary_required and instruction.item_status == "in_progress":
+        lines.extend(
+            [
+                "Replace `<one or two sentences for the next step>` with a short "
+                "handover the next step will read: what you did and what it must "
+                "know. Keep the full detail in the artifact.",
+                "",
+            ]
+        )
+    _required_values(lines, instruction)
+    _required_metadata(lines, instruction)
+    lines.extend(["```console", command, "```"])
+
+
+def _required_values(lines: Lines, instruction: Instruction) -> None:
+    if not instruction.required_values:
+        return
+    lines.extend(
+        [
+            "Before ww can continue, replace each `<...>` placeholder "
+            "in the command with the value you obtained:",
+            "",
+            *(
+                f"- `{value.name}` — {value.description}"
+                for value in instruction.required_values
+            ),
+        ]
+    )
+    if any(value.name == "task_id" for value in instruction.required_values):
+        lines.extend(
+            [
+                "",
+                "Use the external ID returned by the tracker, such as "
+                "`PROJ-482`; do not submit the literal `<task_id>` "
+                "placeholder.",
+            ]
+        )
+    if instruction.automatic_context:
+        names = ", ".join(f"`{name}`" for name in instruction.automatic_context)
+        lines.extend(
+            ["", f"ww will run {names} automatically. Do not run it yourself."]
+        )
+    lines.append("")
+
+
+def _required_metadata(lines: Lines, instruction: Instruction) -> None:
+    if not instruction.required_metadata:
+        return
+    scopes = {value.scope for value in instruction.required_metadata}
+    scope_label = (
+        f"{next(iter(scopes))} metadata"
+        if len(scopes) == 1
+        else "task and project metadata"
+    )
+    lines.extend([f"Detect and preserve these {scope_label} values:", ""])
+    lines.extend(
+        f"- `{value.name}` as `"
+        f"{'project_metadata' if value.scope == 'project' else 'metadata'}"
+        f".{value.key}`"
+        + (f" — {value.description}" if value.description else "")
+        + (
+            f" (a list: repeat `--metadata {value.name}=<value>` once per value, "
+            "or omit it when there is none; earlier values are kept)"
+            if value.append
+            else ""
+        )
+        for value in instruction.required_metadata
+    )
+    lines.append("")
+
+
+def _manager_intro() -> Lines:
+    return [
+        "### How `ww` manages this task",
+        "",
+        "`ww` follows a saved workflow plan, persists progress, runs automatic "
+        "handlers, and tells the manager or worker exactly what to do next. "
+        "Follow the role and command in each response; there is no need to "
+        "inspect `workflows.yaml`, the `ww` source, or its documentation.",
+        "",
+    ]
+
+
+def _failed_handler_guidance(instruction: Instruction) -> Lines:
+    if instruction.workflow_runtime != "single" and instruction.caller_role == "worker":
+        return [
+            "Stop here. Return this `ww` response to the manager for resolution. "
+            "Do not fix, rerun, or work around the failed automatic handler.",
+        ]
+    return [
+        "This requires manual intervention from the `ww` operator. Do not retry "
+        "on your own, and do not work around the failed automatic handler.",
+    ]
+
+
+def _failed_child(instruction: Instruction) -> ChildTask | None:
+    if instruction.workflow_runtime != "single" and instruction.caller_role == "worker":
+        return None
+    if not instruction.is_child_workflow_control:
+        return None
+    return next(
+        (child for child in instruction.child_tasks if child.status == "failed"), None
+    )
+
+
+def _append_section(lines: Lines, title: str) -> None:
+    while lines and lines[-1] == "":
+        lines.pop()
+    lines.extend(["", f"### {title}", ""])
+
+
+def _blockquote(value: str) -> Lines:
+    return [f"> {line}" if line else ">" for line in value.splitlines()]
+
+
+def _role(instruction: Instruction) -> str:
+    if instruction.loop_limit_reached:
+        return "Manager"
+    match audience(instruction):
+        case Audience.SINGLE_SESSION:
+            return "Manager and worker"
+        case Audience.MANAGER_DELEGATING | Audience.MANAGER:
+            return "Manager"
+        case Audience.WORKER_RETURNING | Audience.WORKER:
+            return "Worker"
+
+
+def _action_heading(instruction: Instruction) -> str:
+    name = instruction.item_name or "workflow"
+    reader = audience(instruction)
+    if instruction.loop_limit_reached:
+        return f"escalate the `{name}` loop limit"
+    if instruction.is_loop_control:
+        return f"advance the `{name}` loop"
+    if reader is Audience.MANAGER_DELEGATING:
+        return f"delegate the `{instruction.assignment_step or name}` assignment"
+    if instruction.item_status == "pending":
+        if reader is Audience.WORKER_RETURNING:
+            return "return control to the manager"
+        return f"dispatch the `{name}` assignment"
+    if name == "init":
+        return "record the task requirements"
+    return f"perform `{name}`"
+
+
+_ASSIGNMENT_COMPLETE = (
+    "This assignment is complete. Stop here: do not run a manager command "
+    "or any further `ww` command. Return this `ww` response, a concise "
+    "outcome, and artifact references to the manager."
+)
+_RUN_MANAGER_COMMAND = (
+    "You are the manager. Run the displayed manager command yourself."
+)
+
+
+def _assignment_coverage(instruction: Instruction) -> Lines:
+    """Name every item one worker performs in this assignment, when several."""
+    first, *rest = instruction.assignment_items or ("",)
+    if not rest:
+        return []
+    names = ", ".join(f"`{name}`" for name in (first, *rest))
+    return [
+        f"This assignment covers, in order: {names}. One worker performs them "
+        "all; `ww` hands each one over after the previous completion.",
+        "",
+    ]
+
+
+def _role_instruction(instruction: Instruction) -> Lines:
+    reader = audience(instruction)
+    if instruction.loop_limit_reached:
+        worker_caller = (
+            instruction.workflow_runtime == "auto"
+            and instruction.caller_role == "worker"
+        )
+        if worker_caller:
+            return [
+                "This loop has reached its configured limit. Do not start another "
+                "iteration. Return this response and the saved iteration results "
+                "to the manager for user escalation.",
+                "",
+            ]
+        return [
+            "Do not start another iteration. Report the saved loop results and "
+            "this warning to the user for manual resolution.",
+            "",
+        ]
+    if instruction.is_loop_control:
+        if reader is Audience.WORKER_RETURNING:
+            return [_ASSIGNMENT_COMPLETE, ""]
+        return [_RUN_MANAGER_COMMAND, ""]
+    if instruction.manager_input:
+        return [
+            "This assignment only supplies values to an automatic handler. You "
+            "are the manager: provide them yourself with the command below. Do "
+            "not delegate this to a worker.",
+            "",
+        ]
+    match reader:
+        case Audience.SINGLE_SESSION:
+            active_role = "worker" if instruction.next_role == "worker" else "manager"
+            return [
+                "You are both manager and worker in this session. For this "
+                f"instruction, act as the {active_role} and do the work yourself. "
+                "Do not spawn a subagent.",
+                "",
+            ]
+        case Audience.WORKER_RETURNING:
+            return [_ASSIGNMENT_COMPLETE, ""]
+        case Audience.MANAGER_DELEGATING:
+            return [
+                "You are the manager. Select the worker and give it the bootstrap "
+                "command below:",
+                "",
+                *_assignment_coverage(instruction),
+            ]
+        case Audience.WORKER:
+            if instruction.assignment_continues and instruction.completion_registered:
+                item = instruction.item_name
+                return [
+                    f"Same assignment continues: next item `{item}`. "
+                    "Do not return to the manager yet. Perform it and run the "
+                    "displayed worker completion command.",
+                    "",
+                ]
+            return [
+                "You are the worker for this assignment. Perform the work and run "
+                "the displayed worker completion command. Continue until `ww` "
+                "explicitly returns control to the manager. `ww` saves your "
+                "result from that command's `--artifact`; never create or edit "
+                "files under `.ww`, except a document this page names.",
+                "",
+                *_assignment_coverage(instruction),
+            ]
+        case Audience.MANAGER:
+            return [
+                f"{_RUN_MANAGER_COMMAND} Pass "
+                "the complete response from `ww next` to the selected worker.",
+                "",
+            ]
