@@ -729,6 +729,121 @@ workflows:
     assert commands[0].stdout == "first-output"
 
 
+def test_interrupted_idempotent_handler_replays_without_an_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "workflows.yaml").write_text(
+        """handlers:
+  - name: count
+    shell: printf x >> count.txt
+    idempotent: true
+hooks:
+  before_complete:
+    - steps: [work]
+      name: count
+workflows:
+  - name: task
+    steps:
+      - name: work
+        prompt: true
+""",
+        encoding="utf-8",
+    )
+    service = WorkflowService(Storage(tmp_path))
+    start_after_init(service, "task", "TASK-IDEMPOTENT", agent="codex")
+    service.next("TASK-IDEMPOTENT")
+
+    def interrupted(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise KeyboardInterrupt
+
+    real_popen = subprocess.Popen
+    monkeypatch.setattr("ww.action_execution._PROCESS.Popen", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        service.complete(
+            "TASK-IDEMPOTENT", artifact="# done\n", summary_for_next="Done."
+        )
+    monkeypatch.setattr("ww.action_execution._PROCESS.Popen", real_popen)
+    resumed = WorkflowService(Storage(tmp_path))
+    interrupted_state = resumed.tasks.read_execution_state("TASK-IDEMPOTENT", "01-task")
+    assert interrupted_state is not None
+    stale = interrupted_state.item_executions[2].commands[0]
+    assert stale.status == "in_progress"
+
+    continued = resumed.next("TASK-IDEMPOTENT")
+
+    # The declared-harmless replay ran inside ``next``; nobody was asked.
+    assert continued.status != "interrupted"
+    assert continued.item_name == "update-workflow-summary"
+    assert (tmp_path / "count.txt").read_text() == "x"
+    state = resumed.tasks.read_execution_state("TASK-IDEMPOTENT", "01-task")
+    assert state is not None
+    replayed = state.item_executions[2].commands[0]
+    assert replayed.status == "completed"
+    assert replayed.attempts == 2
+    assert replayed.operation_id == stale.operation_id
+    assert state.item_executions[2].operation_id_known
+
+
+def test_a_crash_after_a_failed_exit_is_a_known_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "workflows.yaml").write_text(
+        """handlers:
+  - name: check
+    shell: printf boom >&2; exit 3
+hooks:
+  before_complete:
+    - steps: [work]
+      name: check
+workflows:
+  - name: task
+    steps:
+      - name: work
+        prompt: true
+""",
+        encoding="utf-8",
+    )
+    service = WorkflowService(Storage(tmp_path))
+    start_after_init(service, "task", "TASK-KNOWN", agent="codex")
+    service.next("TASK-KNOWN")
+
+    def crashed(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise KeyboardInterrupt
+
+    # The process exited and its segment was recorded; ww died before the
+    # coordinator could write the item failure.
+    with monkeypatch.context() as patch:
+        patch.setattr("ww.action_execution.ActionExecutor._fail_item", crashed)
+        with pytest.raises(KeyboardInterrupt):
+            service.complete(
+                "TASK-KNOWN", artifact="# done\n", summary_for_next="Done."
+            )
+
+    resumed = WorkflowService(Storage(tmp_path))
+    stopped = resumed.next("TASK-KNOWN")
+
+    assert stopped.status == "failed"
+    assert stopped.error is not None
+    assert "failed (3) at command 1" in stopped.error
+    assert "before it recorded the failure" in stopped.error
+    assert stopped.error.endswith("boom")
+    state = resumed.tasks.read_execution_state("TASK-KNOWN", "01-task")
+    assert state is not None
+    assert state.item_executions[2].status == "failed"
+    assert state.item_executions[2].commands[0].status == "failed"
+
+    retried = resumed.next("TASK-KNOWN", retry=True)
+
+    assert retried.status == "failed"
+    assert retried.error is not None
+    assert "before it recorded" not in retried.error
+    state = resumed.tasks.read_execution_state("TASK-KNOWN", "01-task")
+    assert state is not None
+    assert state.item_executions[2].commands[0].attempts == 2
+
+
 def test_automatic_command_persists_attempt_and_operation_environment(
     tmp_path: Path,
 ) -> None:

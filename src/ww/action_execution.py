@@ -152,6 +152,7 @@ class _CommandService:
                 failed,
                 executor.now(),
             )
+            executor.commit(self._dispatch.state, self._dispatch.snapshot)
             return CommandOutcome(False, stderr=detail, launch_error=detail)
         with process:
             stdout, stderr = process.communicate()
@@ -193,10 +194,10 @@ class _CommandService:
             completed_record,
             executor.now(),
         )
-        # A successful segment is a durable recovery boundary. Failed segments
-        # are persisted by the coordinator with the item failure.
-        if process.returncode == 0:
-            executor.commit(self._dispatch.state, self._dispatch.snapshot)
+        # Every finished segment is a durable boundary: a success is never
+        # replayed, and a recorded failure stays a known outcome even when ww
+        # dies before the coordinator writes the item failure.
+        executor.commit(self._dispatch.state, self._dispatch.snapshot)
         return CommandOutcome(
             process.returncode == 0, stdout, stderr, process.returncode
         )

@@ -268,6 +268,25 @@ env:
 `assert` adds an `eq` output assertion to the root command action. A handler is
 one action; use a hook's ordered `handlers` list for multiple commands.
 
+`idempotent: true` declares that running the handler again is harmless. It
+changes one thing: when ww is interrupted while the handler runs, the next
+locked `next` replays the interrupted and unrun commands under the same
+operation identity and carries on, instead of stopping at the recovery
+boundary for an operator decision. The default is `false`, which keeps the
+unknown outcome until `next --retry`, `recover --mark-succeeded`, or a checker
+settles it; see [Interrupted automatic handlers](#interrupted-automatic-handlers).
+Declare it on test runs, linters, and checks that only read; leave it off
+anything that publishes, commits, or sends. `lint` rejects it without `argv`,
+`shell`, or `command`, the saved plan carries it, and `plan` shows it under
+**Recovery**:
+
+```yaml
+handlers:
+  - name: tests
+    argv: [python, -m, pytest, -q]
+    idempotent: true
+```
+
 ### Handler types and ownership
 
 Set `skill: true`, `slash_command: true`, `mcp: <connection>`, `argv`, `shell`,
@@ -1766,7 +1785,14 @@ state. Pass global `--root /path/to/project` to select a project explicitly.
 If ww is interrupted after it records an automatic command or extension as
 started, the operation is shown as `interrupted` because its external outcome
 is unknown. `next` only reports that recovery boundary; it never replays the
-operation implicitly. Inspect its current state with:
+operation implicitly. Two cases are settled without asking. A command that
+had already exited non-zero when ww died is a known failure, not an unknown
+outcome: every finished command is recorded the moment it exits, so `next`
+reports it as `failed` with the exit code and what it printed, and the
+ordinary `next --retry` applies. A command handler declared
+`idempotent: true` is replayed by `next` itself, because its author has said
+a second run cannot do damage. For everything else, inspect the current state
+with:
 
 ```console
 ww-agentic-workflows status TASK-123 --role manager

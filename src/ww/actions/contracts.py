@@ -95,6 +95,9 @@ class CommandDefinition:
 class Commands:
     commands: tuple[CommandDefinition, ...]
     assertion: AssertionDefinition | None = None
+    # The author's statement that running the sequence again is harmless, so
+    # an interrupted run may be replayed without an operator decision.
+    idempotent: bool = False
 
 
 @dataclass(frozen=True)
@@ -242,8 +245,9 @@ class ActionTraits:
     Every field has the plain default, so an action only names what it needs:
     ``command_segments`` is ``None`` unless the action runs durable command
     segments, ``attests_output`` says an interrupted command needs operator
-    stdout to settle its assertion, and ``manual_attestation`` lists what an
-    operator may attest after an interruption.
+    stdout to settle its assertion, ``manual_attestation`` lists what an
+    operator may attest after an interruption, and ``idempotent`` lets core
+    replay an interrupted action without asking anyone.
     """
 
     attests_output: bool = False
@@ -251,6 +255,7 @@ class ActionTraits:
     manual_attestation: frozenset[AttestationField] = frozenset()
     extension_binding: ExtensionBinding | None = None
     command_segments: tuple[CommandDefinition, ...] | None = None
+    idempotent: bool = False
 
 
 class Action(ABC, Generic[DefinitionT, PlannedT]):

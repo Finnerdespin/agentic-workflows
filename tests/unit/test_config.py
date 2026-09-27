@@ -1674,3 +1674,56 @@ def test_one_stage_per_item_flow_is_answered_on_the_page(tmp_path: Path) -> None
 """,
             )
         )
+
+
+def test_idempotent_is_declared_where_the_command_is(tmp_path: Path) -> None:
+    configuration = load_configuration(
+        _write(
+            tmp_path / "workflows.yaml",
+            """handlers:
+  - name: tests
+    argv: [pytest, -q]
+    idempotent: true
+workflows:
+  - name: task
+    steps:
+      - lint:
+        shell: ruff check src
+        idempotent: true
+      - verify: ~
+        handler: tests
+      - plain:
+        argv: [printf, ready]
+""",
+        )
+    )
+
+    assert configuration.handlers[0].action.payload.idempotent
+    lint, verify, plain = configuration.workflows[0].steps
+    assert lint.action.payload.idempotent
+    # A referencing step inherits the declaration with the command.
+    assert verify.action.payload.idempotent
+    assert not plain.action.payload.idempotent
+
+
+@pytest.mark.parametrize(
+    ("handler", "message"),
+    [
+        (
+            "  - name: announce\n    description: Tell them.\n    idempotent: true\n",
+            "idempotent require argv or shell",
+        ),
+        (
+            "  - name: tests\n    argv: [pytest]\n    idempotent: always\n",
+            "idempotent must be a boolean",
+        ),
+    ],
+)
+def test_idempotent_needs_a_command_and_a_boolean(
+    tmp_path: Path, handler: str, message: str
+) -> None:
+    workflows = "workflows:\n  - name: task\n    steps:\n      - work: Work.\n"
+    with pytest.raises(ConfigurationError, match=message):
+        load_configuration(
+            _write(tmp_path / "workflows.yaml", f"handlers:\n{handler}{workflows}")
+        )

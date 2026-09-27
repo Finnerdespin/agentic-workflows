@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import errno
 import fcntl
+import os
+import stat
 import threading
 import time
 from pathlib import Path
@@ -40,6 +42,26 @@ def test_atomic_write_creates_parents_and_leaves_no_temporary_files(
 
     assert target.read_text(encoding="utf-8") == "second\n"
     assert [entry.name for entry in target.parent.iterdir()] == ["state.json"]
+
+
+def test_atomic_write_syncs_the_file_before_and_the_directory_after_the_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Power loss, not only process death, must not lose a committed state."""
+    synced: list[str] = []
+    real_fsync = os.fsync
+
+    def recording(descriptor: int) -> None:
+        kind = "directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file"
+        synced.append(kind)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", recording)
+    target = tmp_path / "tasks" / "TASK-1" / "state.json"
+
+    FileLocks(tmp_path).atomic_write(target, "{}\n")
+
+    assert synced == ["file", "directory"]
 
 
 def test_append_line_terminates_records(tmp_path: Path) -> None:

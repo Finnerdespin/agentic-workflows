@@ -15,6 +15,7 @@ from ww.contracts import StepStatus
 from ww.control import loop_control
 from ww.errors import StateError
 from ww.execution_models import (
+    CommandExecution,
     ExecutionState,
     InputRequest,
     PlanSnapshot,
@@ -147,6 +148,59 @@ def interrupt_automatic_item(
         replace(
             state,
             status="interrupted",
+            active_item_id=item.id,
+            item_executions=tuple(records),
+            last_error=message,
+            updated_at=now(),
+        ),
+        plan,
+        now,
+    )
+
+
+def settle_stale_automatic_item(
+    state: ExecutionState, plan: WorkflowPlan, item: PlanItem, now: Clock
+) -> ExecutionState:
+    """Classify an automatic item whose process died before it recorded an end.
+
+    A command segment that already recorded its non-zero exit is a known
+    failure: the external process finished, only ww's bookkeeping was cut
+    short.  Any other stale record still has an operation unaccounted for and
+    stays an unknown outcome.
+    """
+    commands = state.item_executions[state.cursor].commands
+    if any(command.status == "in_progress" for command in commands):
+        return interrupt_automatic_item(state, plan, item, now)
+    failed = next((command for command in commands if command.status == "failed"), None)
+    if failed is None:
+        return interrupt_automatic_item(state, plan, item, now)
+    return _fail_stale_automatic_item(state, plan, item, failed, now)
+
+
+def _fail_stale_automatic_item(
+    state: ExecutionState,
+    plan: WorkflowPlan,
+    item: PlanItem,
+    command: CommandExecution,
+    now: Clock,
+) -> ExecutionState:
+    exit_code = f" ({command.exit_code})" if command.exit_code is not None else ""
+    # ``CommandExecution.index`` is the segment's one-based declaration ordinal.
+    message = (
+        f"automatic handler {item.name!r} failed{exit_code} at command "
+        f"{command.index}; ww was interrupted before it recorded the failure"
+    )
+    detail = command.stderr.strip() or command.stdout.strip()
+    if detail:
+        message = f"{message}\n\n{detail}"
+    records = list(state.item_executions)
+    records[state.cursor] = replace(
+        records[state.cursor], status="failed", error=message
+    )
+    return project_steps(
+        replace(
+            state,
+            status="failed",
             active_item_id=item.id,
             item_executions=tuple(records),
             last_error=message,

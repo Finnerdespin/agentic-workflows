@@ -96,7 +96,6 @@ from ww.transitions import (
     finish_loop_continue,
     finish_loop_exit,
     finish_selection,
-    interrupt_automatic_item,
     loop_limit_reached,
     materialize_item_plan,
     pause_for_agent,
@@ -106,6 +105,7 @@ from ww.transitions import (
     request_loop_exit,
     retry_failed_item,
     select_assessment_outcome,
+    settle_stale_automatic_item,
     skip_failed_item,
     supply_requested_input,
 )
@@ -739,9 +739,13 @@ class WorkflowService:
                 self.commit(state, snapshot)
             else:
                 # Never replay an operation with an unknown external outcome as
-                # an incidental consequence of asking for the next instruction.
-                # Use ``next --retry`` or explicitly force past it.
-                return self.render(state, snapshot)
+                # an incidental consequence of asking for the next instruction,
+                # unless its handler declared the replay harmless.  Otherwise
+                # use ``next --retry`` or explicitly force past it.
+                replayed = self.recovery.replay_if_idempotent(state, snapshot)
+                if replayed is None:
+                    return self.render(state, snapshot)
+                return self.resume(replayed, snapshot)
         if state.status == "failed":
             if force:
                 if state.cursor >= len(snapshot.plan.items):
@@ -769,6 +773,9 @@ class WorkflowService:
                 and record.status == "in_progress"
             ):
                 state = self.mark_interrupted(state, snapshot)
+                replayed = self.recovery.replay_if_idempotent(state, snapshot)
+                if replayed is not None:
+                    return self.resume(replayed, snapshot)
                 return self.render(state, snapshot)
             if state.workflow_runtime == "single":
                 # The same session holds every step: asking again for the one
@@ -903,11 +910,12 @@ class WorkflowService:
 
         An ``in_progress`` record is only written immediately before invoking
         an external command or extension.  Seeing one during a later command
-        therefore means the outcome is unknown; it must never be interpreted
-        as agent-owned work or silently skipped.
+        therefore means the outcome is unknown, unless a command segment had
+        already recorded its non-zero exit, which is a known failure.  Neither
+        may be interpreted as agent-owned work or silently skipped.
         """
         item = snapshot.plan.items[state.cursor]
-        state = interrupt_automatic_item(state, snapshot.plan, item, _now)
+        state = settle_stale_automatic_item(state, snapshot.plan, item, _now)
         self.commit(state, snapshot)
         return state
 

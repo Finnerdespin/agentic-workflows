@@ -139,6 +139,9 @@ class RecoveryCoordinator:
             )
             self._check_attestation_support(target, decision)
             if decision.inspecting:
+                replayed = self.replay_if_idempotent(state, snapshot)
+                if replayed is not None:
+                    return self.lifecycle.resume(replayed, snapshot)
                 if self._command_boundaries_known(target):
                     # Every durable command boundary is known: resume pending
                     # segments without asking the operator to attest anything.
@@ -171,6 +174,39 @@ class RecoveryCoordinator:
                     now=self.now,
                 )
             return self.lifecycle.resume(state, snapshot)
+
+    def replay_if_idempotent(
+        self, state: ExecutionState, snapshot: PlanSnapshot
+    ) -> ExecutionState | None:
+        """Return an interrupted item to pending when its replay is declared harmless.
+
+        ``idempotent: true`` on a command handler is the author's statement
+        that running the sequence again cannot do damage, so the unknown
+        outcome needs no operator: the interrupted and unrun segments run
+        again under the same operation identity.  Anything else returns
+        ``None`` and stays at the recovery boundary.
+        """
+        if state.status != "interrupted" or state.cursor >= len(snapshot.plan.items):
+            return None
+        item = snapshot.plan.items[state.cursor]
+        record = state.item_executions[state.cursor]
+        if (
+            record.status != "interrupted"
+            or not isinstance(item.operation, PlannedAction)
+            or not actions.contains(item.kind)
+        ):
+            return None
+        implementation = actions.get(item.kind)
+        planned = item.payload_as(implementation.planned_type)
+        if not implementation.traits(planned).idempotent:
+            return None
+        return resume_interrupted_item(
+            state,
+            snapshot.plan,
+            item,
+            retry_unknown_commands=True,
+            now=self.now,
+        )
 
     def _interrupt_stale_operation(
         self, state: ExecutionState, snapshot: PlanSnapshot

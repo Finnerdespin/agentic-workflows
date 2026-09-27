@@ -111,6 +111,7 @@ def _parse_handler(
             "args",
             "env",
             "assert",
+            "idempotent",
             "command",
         }
         if shorthand_keys & set(mapping):
@@ -162,7 +163,7 @@ def _parse_handler(
     if any(mapping.get(key) is not True for key in explicit):
         raise ConfigurationError(f"handler {name!r} kind flags must be true")
     has_command = bool({"command", "argv", "shell"} & set(mapping))
-    if {"args", "env", "assert"} & set(mapping) and not has_command:
+    if {"args", "env", "assert", "idempotent"} & set(mapping) and not has_command:
         actions.get("cli").parse(mapping, name, description, f"handler {name!r}")
     if has_command and explicit:
         raise ConfigurationError(
@@ -223,6 +224,7 @@ def _handler_keys() -> set[str]:
         "args",
         "env",
         "assert",
+        "idempotent",
         "agent",
         "command",
         "provide",

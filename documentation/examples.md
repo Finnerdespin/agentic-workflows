@@ -33,13 +33,18 @@ workflows:
 Handlers are defined once and attached to lifecycle phases. Global hooks apply
 to every workflow, workflow hooks to one workflow, and step hooks to one step.
 Automatic handlers, here `argv` commands, run by ww itself; the agent never
-executes them. `assert` checks the command's output.
+executes them. `assert` checks the command's output. `idempotent: true` says
+that running the handler again is harmless, so when ww is interrupted while
+it runs, the next `next` replays it instead of stopping for an operator
+decision; leave it off a handler whose replay could do damage, such as a
+publish or a commit.
 
 ```yaml
 handlers:
   - name: lint
     description: Run the linters.
     argv: [ruff, check, src]
+    idempotent: true
   - name: verify-clean
     argv: [printf, clean]
     assert:

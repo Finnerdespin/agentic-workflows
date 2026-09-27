@@ -409,6 +409,7 @@ Each root handler, and each step through the same shared shape, accepts:
 | `args` | string list | no | Positional arguments for `shell`. |
 | `env` | string mapping | no | Environment values for `shell`. |
 | `assert` | assertion | no | Expected command output. |
+| `idempotent` | boolean | no | Running the command action again is harmless: an interrupted run is replayed by `next` instead of waiting for an operator. Requires `argv`, `shell`, or `command`. Defaults to `false`. |
 | `provide` | list of provided values | no | Values requested from the agent and exposed to later actions. |
 | `update_metadata` | list of metadata values | no | Values saved by an agent-owned action. |
 | `update_document` | list of document updates | no | Documents an agent-owned action creates or edits in place; each names a root document, with the text instructing the update. |

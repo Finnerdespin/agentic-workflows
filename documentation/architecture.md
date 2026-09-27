@@ -435,7 +435,11 @@ rather than guessing that its process died. Roles describe caller responsibility
 not authorization, and omitted roles preserve the earlier service behavior.
 
 The ledger records command segments separately, so a partial CLI failure retries
-only the failed or unrun segment. Each new run persists a unique execution-instance
+only the failed or unrun segment. Every finished segment is committed the moment
+its process exits, success or failure, so the ledger is a durable boundary in
+both directions: a success is never replayed to aggregate its output, and a
+recorded failure stays a known outcome even if ww dies before the coordinator
+writes the item failure. Each new run persists a unique execution-instance
 identity in addition to its human-readable numbered run name. Item and command
 operation IDs include that identity, so retries keep the same idempotency key while
 resetting and recreating a task cannot recover an external effect from the deleted
@@ -504,18 +508,27 @@ Mypy checks the public models, ports, and extracted boundaries as a development
 release gate alongside Ruff and pytest.
 
 Automatic work is written as `in_progress` before an external side effect. A
-locked `next` that finds that boundary classifies it as
-`interrupted`, preserving completed segments and making the outcome explicitly
-unknown. This matters because a process can die after a remote or Git operation
-succeeds but before ww records completion. `next` never replays such work
-implicitly. `next --retry` offers explicit replay with the same operation
-identity, or an operator attestation; CLI attestations can supply captured
-output for assertion evaluation. A command that cannot be launched is instead a
-known failed attempt: ww records the process-creation error and uses the ordinary
-failed-item retry path because no external process acquired an unknown outcome. A
-checker-capable automatic action can return succeeded, not-succeeded, or
-unknown, allowing safe default recovery without claiming exactly-once
-execution. Extension contexts carry the current plan and work-item identities,
+locked `next` that finds that boundary settles it
+(`settle_stale_automatic_item` in `../src/ww/transitions.py`): when a command
+segment had already recorded its non-zero exit, the process demonstrably
+finished and only ww's bookkeeping was cut short, so the item becomes a known
+failure with that exit code and output and takes the ordinary failed-item
+path; otherwise the item is `interrupted`, preserving completed segments and
+making the outcome explicitly unknown. This matters because a process can die
+after a remote or Git operation succeeds but before ww records completion.
+`next` never replays such work implicitly. The one exception is the author's
+own declaration: a command handler with `idempotent: true` states that a
+second run cannot do damage, so `RecoveryCoordinator.replay_if_idempotent`
+returns the interrupted and unrun segments to pending under the same
+operation identity and `next` continues, with no operator decision. Without
+it, `next --retry` offers explicit replay with the same operation identity,
+or an operator attestation; CLI attestations can supply captured output for
+assertion evaluation. A command that cannot be launched is a known failed
+attempt: ww records the process-creation error and uses the ordinary
+failed-item retry path because no external process acquired an unknown
+outcome. A checker-capable automatic action can return succeeded,
+not-succeeded, or unknown, allowing safe default recovery without claiming
+exactly-once execution. Extension contexts carry the current plan and work-item identities,
 attempt number, and stable operation identity. Successful extension results may
 return only their handler's declared structured outputs; ww records those
 outputs separately from human-readable output and adds them to the workflow
@@ -649,8 +662,13 @@ The guarantees for the current local execution model are:
   protected only when the extension uses `update_text`; separate reads and
   writes do not acquire a transaction spanning both calls.
 - Interruption after automatic work starts is represented as an unknown outcome
-  and is never replayed implicitly. Completed command segments are retained,
+  and is never replayed implicitly, unless the handler itself declared
+  `idempotent: true`. A segment that already recorded its exit is a known
+  failure, not an unknown outcome. Completed command segments are retained,
   and retry, checker-based recovery, or operator attestation is explicit.
+- Atomic replacement writes fsync the temporary file before the rename and the
+  containing directory after it, so a committed state survives power loss, not
+  only process death.
 
 These guarantees do not provide exactly-once external side effects. An
 extension without a checker may require an operator decision, and an extension

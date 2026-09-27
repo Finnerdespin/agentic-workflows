@@ -9,6 +9,27 @@ The package version stays at 0.1.0 while the release process is not yet in
 place. What may change between two pulls, and what ww does not promise yet,
 is in [documentation/limitations.md](documentation/limitations.md).
 
+## 2026-09-27
+
+- A command handler can declare `idempotent: true`. When ww is interrupted
+  while such a handler runs — the process died, the terminal closed, the
+  machine went down — the next `next` replays the interrupted and unrun
+  commands under the same operation identity instead of stopping at the
+  recovery boundary, because the author has said a second run cannot do
+  damage. The default stays `false`: an interrupted handler without the
+  declaration keeps its unknown outcome until `next --retry`,
+  `recover --mark-succeeded`, or a checker settles it. `lint` validates the
+  key, the saved plan carries it, and `plan` shows it under **Recovery**.
+- A command that exits non-zero is now recorded durably the moment it exits,
+  not only when the whole handler's failure is written. A crash in that
+  window used to leave the segment `in_progress`, so the next `next` reported
+  an unknown outcome and asked the operator to decide about a command that
+  had visibly finished; it now reports the known failure, with the exit code
+  and what the command printed, and the ordinary `next --retry` applies.
+- Task state was already written with `fsync` on the temporary file before
+  the atomic rename and on the directory after it; a test now pins both, so
+  the durability against power loss cannot regress silently.
+
 ## 2026-09-26
 
 - A failed automatic handler now tells the operator enough to decide. The

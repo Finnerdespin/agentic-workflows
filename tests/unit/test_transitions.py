@@ -20,6 +20,7 @@ from ww.transitions import (
     interrupt_automatic_item,
     resume_interrupted_item,
     retry_failed_item,
+    settle_stale_automatic_item,
 )
 
 NOW = "2026-09-09T12:00:00Z"
@@ -146,3 +147,50 @@ def test_interrupted_automatic_item_preserves_one_recovery_boundary() -> None:
     assert state.item_executions[0].status == "pending"
     assert state.item_executions[0].commands[0].status == "pending"
     assert state.item_executions[0].operation_id_known
+
+
+def _stale_automatic_run(
+    **command_changes: object,
+) -> tuple[PlanItem, WorkflowPlan, ExecutionState]:
+    item = _item(
+        operation=PlannedAction(
+            "cli", Commands((CommandDefinition(argv=("example",)),))
+        ),
+        owner="ww",
+        execution="automatic",
+    )
+    plan, state = _run(item)
+    command = replace(state.item_executions[0].commands[0], **command_changes)
+    record = replace(
+        state.item_executions[0], status="in_progress", commands=(command,)
+    )
+    state = replace(
+        state, status="in_progress", active_item_id=item.id, item_executions=(record,)
+    )
+    return item, plan, state
+
+
+def test_a_stale_segment_that_recorded_its_exit_is_a_known_failure() -> None:
+    item, plan, state = _stale_automatic_run(
+        status="failed", exit_code=3, stderr="boom\n"
+    )
+
+    state = settle_stale_automatic_item(state, plan, item, _now)
+
+    assert state.status == "failed"
+    assert state.item_executions[0].status == "failed"
+    assert state.item_executions[0].commands[0].status == "failed"
+    assert state.last_error is not None
+    assert "failed (3) at command 1" in state.last_error
+    assert "before it recorded the failure" in state.last_error
+    assert state.last_error.endswith("boom")
+    assert state.steps[0].status == "failed"
+
+
+def test_a_stale_segment_still_running_stays_an_unknown_outcome() -> None:
+    item, plan, state = _stale_automatic_run(status="in_progress")
+
+    state = settle_stale_automatic_item(state, plan, item, _now)
+
+    assert state.status == "interrupted"
+    assert state.item_executions[0].commands[0].status == "interrupted"

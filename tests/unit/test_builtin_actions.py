@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -208,10 +208,21 @@ def test_mcp_plans_both_fields_and_renders_failure_guidance() -> None:
             ),
         ),
         ("cli", Commands((CommandDefinition(argv=("true",)),))),
+        ("cli", Commands((CommandDefinition(argv=("true",)),), idempotent=True)),
     ],
 )
 def test_payloads_round_trip(identifier: str, planned: object) -> None:
     assert _round_trip(identifier, planned) == planned
+
+
+def test_command_idempotent_default_is_omitted_from_saved_plans() -> None:
+    action = actions.get("cli")
+    plain = Commands((CommandDefinition(argv=("true",)),))
+
+    assert "idempotent" not in action.encode(plain)
+    assert action.encode(replace(plain, idempotent=True))["idempotent"] is True
+    # A plan saved before the key existed still decodes to the default.
+    assert not action.decode({"commands": [{"argv": ["a"]}], "assert": None}).idempotent
 
 
 @pytest.mark.parametrize(
@@ -240,6 +251,11 @@ def test_payloads_round_trip(identifier: str, planned: object) -> None:
                 "assert": {"operator": "ne", "expected": "x"},
             },
         ),
+        (
+            "cli",
+            {"commands": [{"argv": ["a"]}], "assert": None, "idempotent": "yes"},
+        ),
+        ("cli", {"commands": [{"argv": ["a"]}], "idempotent": True}),
     ],
 )
 def test_decode_rejects_malformed_payloads(
@@ -293,11 +309,30 @@ def test_command_parses_argv_shell_and_nested_forms() -> None:
     )
 
 
+def test_command_idempotent_is_parsed_planned_and_shown() -> None:
+    action = actions.get("cli")
+    planned = _parse_command({"argv": ["pytest", "-q"], "idempotent": True})
+    plain = _parse_command({"argv": ["pytest", "-q"]})
+
+    assert planned.idempotent
+    assert not plain.idempotent
+    assert _parse_command({"command": [{"argv": ["a"]}], "idempotent": True}).idempotent
+    assert action.plan(planned, _resolution()).idempotent
+    assert action.traits(planned).idempotent
+    assert not action.traits(plain).idempotent
+    shown = "\n".join(action.instruction(planned, _context("Test.")).markdown)
+    assert "**Recovery**" in shown
+    assert "Idempotent: after an interruption ww replays it" in shown
+    assert "Recovery" not in "\n".join(action.instruction(plain, _context()).markdown)
+
+
 @pytest.mark.parametrize(
     ("source", "message"),
     [
         ({}, "p requires argv or shell"),
-        ({"args": ["x"]}, "args, env, and assert require argv or shell"),
+        ({"args": ["x"]}, "args, env, assert, and idempotent require argv or shell"),
+        ({"idempotent": True}, "idempotent require argv or shell"),
+        ({"argv": ["a"], "idempotent": "yes"}, "p.idempotent must be a boolean"),
         ({"argv": ["a"], "shell": "b"}, "cannot combine argv and shell"),
         ({"argv": []}, "argv must be a non-empty list of strings"),
         ({"argv": ["a", ""]}, "argv must be a non-empty list of strings"),

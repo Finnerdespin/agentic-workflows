@@ -11,7 +11,7 @@ from typing import Any
 from ww.errors import ConfigurationError, StateError
 from ww.interpolation import dependencies, interpolate
 from ww.validation import (
-    expect_keys,
+    expect_bool,
     expect_mapping,
     expect_nonempty_string,
     expect_normalized_name,
@@ -119,6 +119,7 @@ class CommandAction(AutomaticAction[Commands, Commands]):
         return ActionTraits(
             attests_output=planned.assertion is not None,
             command_segments=planned.commands,
+            idempotent=planned.idempotent,
         )
 
     def parse(
@@ -127,7 +128,7 @@ class CommandAction(AutomaticAction[Commands, Commands]):
         commands, assertion = _parse_command(source, path)
         if not commands:
             raise ConfigurationError(f"{path} requires argv or shell")
-        return Commands(commands, assertion)
+        return Commands(commands, assertion, _parse_idempotent(source, path))
 
     def validate(self, definition: Commands, path: str) -> None:
         if not definition.commands:
@@ -183,7 +184,7 @@ class CommandAction(AutomaticAction[Commands, Commands]):
             )
             for command in definition.commands
         )
-        return Commands(commands, definition.assertion)
+        return Commands(commands, definition.assertion, definition.idempotent)
 
     def instruction(
         self, planned: Commands, context: InstructionContext
@@ -200,6 +201,17 @@ class CommandAction(AutomaticAction[Commands, Commands]):
                 *(_display_command(command) for command in planned.commands),
                 "```",
                 "",
+                *(
+                    (
+                        "**Recovery**",
+                        "",
+                        "Idempotent: after an interruption ww replays it "
+                        "without asking the operator.",
+                        "",
+                    )
+                    if planned.idempotent
+                    else ()
+                ),
             ),
             after_shared=(
                 (
@@ -214,20 +226,31 @@ class CommandAction(AutomaticAction[Commands, Commands]):
         )
 
     def encode(self, planned: Commands) -> dict[str, object]:
-        return {
+        data: dict[str, object] = {
             "commands": [command.to_dict() for command in planned.commands],
             "assert": planned.assertion.to_dict() if planned.assertion else None,
         }
+        # The default is left out so plans saved before the key existed still
+        # decode, and a plan that relies on it is refused by a ww without it.
+        if planned.idempotent:
+            data["idempotent"] = True
+        return data
 
     def decode(self, data: dict[str, Any]) -> Commands:
-        expect_keys(
-            data,
-            {"commands", "assert"},
-            f"action {self.identifier!r} payload",
-        )
+        keys = set(data)
+        if not {"commands", "assert"} <= keys or keys - {
+            "commands",
+            "assert",
+            "idempotent",
+        }:
+            raise ValueError(f"action {self.identifier!r} payload has invalid fields")
+        idempotent = data.get("idempotent", False)
+        if not isinstance(idempotent, bool):
+            raise ValueError(f"action {self.identifier!r} idempotent must be a boolean")
         return Commands(
             _commands_from_list(data["commands"], "action"),
             _assertion_from_dict(data["assert"], "action"),
+            idempotent,
         )
 
 
@@ -337,9 +360,9 @@ def _parse_command(
         return tuple(_parse_command_action(item, path) for item in values), assertion
     action_keys = {"argv", "shell"} & set(mapping)
     if not action_keys:
-        if {"args", "env", "assert"} & set(mapping):
+        if {"args", "env", "assert", "idempotent"} & set(mapping):
             raise ConfigurationError(
-                f"{path} args, env, and assert require argv or shell"
+                f"{path} args, env, assert, and idempotent require argv or shell"
             )
         return (), None
     if len(action_keys) != 1:
@@ -353,6 +376,15 @@ def _parse_command(
         else None
     )
     return (_parse_command_action(action, path),), assertion
+
+
+def _parse_idempotent(mapping: Mapping[str, Any], path: str) -> bool:
+    """Read the handler-level replay declaration; it defaults to ``False``."""
+    if "idempotent" not in mapping:
+        return False
+    return expect_bool(
+        mapping["idempotent"], f"{path}.idempotent", error=ConfigurationError
+    )
 
 
 def _parse_command_action(value: dict[Any, Any], path: str) -> CommandDefinition:

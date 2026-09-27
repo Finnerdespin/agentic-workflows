@@ -161,6 +161,7 @@ _STEP_CONTENT_KEYS = frozenset(
         "args",
         "env",
         "assert",
+        "idempotent",
         "command",
         "action",
         "provide",
