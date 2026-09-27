@@ -254,6 +254,24 @@ def test_commit_rejects_a_multiline_subject(repository: Path) -> None:
     assert result.error == "commit_message must be a single line"
 
 
+@pytest.mark.parametrize(
+    ("message", "error"),
+    [
+        ("subject\nbody", "commit_message must be a single line"),
+        ("subject\rbody", "commit_message must be a single line"),
+        ("   ", "commit_message is required"),
+        ("one clear subject", None),
+    ],
+)
+def test_the_commit_message_is_validated_when_supplied(
+    message: str, error: str | None
+) -> None:
+    validate = git_extension.EXTENSION.handlers_by_name["git-commit"].validate
+
+    assert validate is not None
+    assert validate({"commit_message": message}) == error
+
+
 def test_a_commit_stages_changes_before_running_a_pre_commit_hook(
     repository: Path,
 ) -> None:

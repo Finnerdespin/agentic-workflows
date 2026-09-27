@@ -483,6 +483,67 @@ workflows:
     assert (tmp_path / "token.txt").read_text() == "abc"
 
 
+def test_a_failed_handler_asks_for_its_values_again_on_retry(tmp_path: Path) -> None:
+    (tmp_path / "workflows.yaml").write_text(
+        """handlers:
+  - name: gate
+    provide:
+      - name: value
+        description: Must be ok.
+    shell: test "$VALUE" = ok
+    env:
+      VALUE: "{{value}}"
+hooks:
+  before_complete:
+    - steps: [work]
+      name: gate
+workflows:
+  - name: task
+    steps:
+      - name: work
+        prompt: true
+""",
+        encoding="utf-8",
+    )
+    service = WorkflowService(Storage(tmp_path))
+    start_after_init(service, "task", "TASK-REASK", agent="codex")
+    service.next("TASK-REASK")
+
+    failed = service.complete(
+        "TASK-REASK", (("value", "bad"),), "# work\n", summary_for_next="Done."
+    )
+    assert failed.status == "failed"
+
+    # A plain ``next`` retries the known failure and asks again rather than
+    # replaying the value the handler failed with.
+    asked = service.next("TASK-REASK")
+    assert asked.item_status == "awaiting_input"
+    assert asked.item_name == "gate"
+    assert [value.name for value in asked.required_values] == ["value"]
+    assert asked.previous_values == (("value", "bad"),)
+    asking = service.tasks.read_execution_state("TASK-REASK", "01-task")
+    assert asking is not None
+    assert "value" not in dict(asking.workflow_values)
+    assert asking.item_executions[2].supplied_values == (("value", "bad"),)
+
+    failed_again = service.complete("TASK-REASK", (("value", "bad"),))
+    assert failed_again.status == "failed"
+
+    asked = service.next("TASK-REASK", retry=True)
+    assert asked.item_status == "awaiting_input"
+    assert asked.previous_values == (("value", "bad"),)
+
+    passed = service.complete("TASK-REASK", (("value", "ok"),))
+
+    assert passed.status != "failed"
+    assert passed.item_name == "update-workflow-summary"
+    state = service.tasks.read_execution_state("TASK-REASK", "01-task")
+    assert state is not None
+    assert state.item_executions[2].status == "completed"
+    assert state.item_executions[2].attempts == 3
+    assert dict(state.workflow_values)["value"] == "ok"
+
+
 def test_interpolated_command_values_remain_data(tmp_path: Path) -> None:
     (tmp_path / "workflows.yaml").write_text(
         """handlers:

@@ -16,7 +16,12 @@ from ww.actions import (
     PlannedAction,
     actions,
 )
-from ww.assignments import active_assignment, assignment_at, completion_window
+from ww.assignments import (
+    active_assignment,
+    assignment_at,
+    completion_window,
+    completion_window_items,
+)
 from ww.bootstrap import BootstrapCoordinator
 from ww.child_coordination import ChildCoordinator
 from ww.children import ChildTask
@@ -1270,18 +1275,17 @@ class WorkflowService:
         assignment = active_assignment(
             snapshot.plan, state.assignment_item_id, runtime=state.workflow_runtime
         )
-        required, _ = completion_window(
-            snapshot.plan,
-            state.cursor,
-            (
-                state.cursor + 1
-                if initialization
-                else assignment.stop
-                if assignment
-                else None
-            ),
-        )
+        if initialization:
+            window_stop: int | None = state.cursor + 1
+        else:
+            window_stop = assignment.stop if assignment else None
+        required, _ = completion_window(snapshot.plan, state.cursor, window_stop)
         validate_requested_values(supplied, required)
+        self._validate_supplied_inputs(
+            state,
+            completion_window_items(snapshot.plan, state.cursor, window_stop),
+            supplied,
+        )
         task_metadata, project_metadata = validate_metadata_values(
             supplied_metadata, item.save_metadata
         )
@@ -1407,6 +1411,36 @@ class WorkflowService:
             )
         return self.render(state, snapshot)
 
+    def _validate_supplied_inputs(
+        self,
+        state: ExecutionState,
+        consumers: tuple[PlanItem, ...],
+        supplied: dict[str, str],
+    ) -> None:
+        """Refuse a value its handler would reject, while nothing is saved yet.
+
+        The consuming handler sees its whole declared input set, already-known
+        values included, and its own message becomes the refusal, so the agent
+        corrects the value in place of a handler failure the operator would
+        have to resolve.
+        """
+        known = {**dict(state.workflow_values), **supplied}
+        for item in consumers:
+            if item.owner != "ww" or item.execution != "automatic":
+                continue
+            if not any(value.name in supplied for value in item.provide):
+                continue
+            error = self.actions.validate_inputs(
+                item,
+                {
+                    value.name: known[value.name]
+                    for value in item.provide
+                    if value.name in known
+                },
+            )
+            if error is not None:
+                raise StateError(f"{item.name} rejected the supplied value: {error}")
+
     def _complete_pending_input(
         self,
         state: ExecutionState,
@@ -1426,6 +1460,7 @@ class WorkflowService:
             raise StateError("task is awaiting input without an input request")
         validate_requested_values(supplied, request.values)
         index = _index_for_id(snapshot.plan, request.item_id)
+        self._validate_supplied_inputs(state, (snapshot.plan.items[index],), supplied)
         state = supply_requested_input(
             state,
             index,

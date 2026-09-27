@@ -474,6 +474,19 @@ class RecoveryExtensionService(Protocol):
     def check(self, planned: Extension) -> ExtensionCheckResult: ...
 
 
+class ExtensionHandlerService(Protocol):
+    """Handler lookup only, for checks that run before any work is recorded."""
+
+    def handler(self, reference: str) -> ExtensionHandler: ...
+
+
+class InputValidationContext(Protocol):
+    """What an action may consult while judging values an agent supplied."""
+
+    @property
+    def extensions(self) -> ExtensionHandlerService: ...
+
+
 class ExecutionContext(Protocol):
     """Read-only invocation information plus deliberately narrow effects."""
 
@@ -567,6 +580,22 @@ class AutomaticAction(Action[DefinitionT, PlannedT]):
     def preflight(self, planned: PlannedT, context: PreflightContext) -> None:
         """Validate identity and configuration before core records a start."""
         del planned, context
+
+    def validate_inputs(
+        self,
+        planned: PlannedT,
+        values: Mapping[str, str],
+        context: InputValidationContext,
+    ) -> str | None:
+        """Judge the declared inputs an agent is about to hand this action.
+
+        Core calls this while the completion that carries the values is still
+        refusable, so a value the action would reject at run time is turned
+        back with this message before anything is saved.  ``values`` holds
+        only the action's own declared inputs.  ``None`` accepts them.
+        """
+        del planned, values, context
+        return None
 
     def check_recovery(
         self, planned: PlannedT, context: RecoveryContext

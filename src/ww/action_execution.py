@@ -304,6 +304,21 @@ class _ExecutionContext:
         )
 
 
+class _HandlerLookup:
+    """Handler access without identity checks, stores, or effects."""
+
+    def __init__(self, executor: ActionExecutor) -> None:
+        self._executor = executor
+
+    def handler(self, reference: str) -> ExtensionHandler:
+        return self._executor.extensions.handler(reference)
+
+
+@dataclass(frozen=True)
+class _InputValidationContext:
+    extensions: _HandlerLookup
+
+
 class _PreflightExtensions:
     def __init__(self, executor: ActionExecutor) -> None:
         self._executor = executor
@@ -527,6 +542,23 @@ class ActionExecutor:
             workflow_values=tuple(values.items()),
         )
         return self._commit_projected(completed, snapshot)
+
+    def validate_inputs(
+        self, item: PlanItem, values: Mapping[str, str]
+    ) -> str | None:
+        """Ask an automatic item's action whether it would accept these inputs.
+
+        Runs before the completion that carries the values is saved; nothing
+        here may record or execute anything.
+        """
+        implementation = actions.get(item.kind)
+        if not isinstance(implementation, AutomaticAction):
+            return None
+        return implementation.validate_inputs(
+            item.payload_as(implementation.planned_type),
+            MappingProxyType(dict(values)),
+            _InputValidationContext(_HandlerLookup(self)),
+        )
 
     def check_recovery(
         self, state: ExecutionState, plan: WorkflowPlan, item: PlanItem

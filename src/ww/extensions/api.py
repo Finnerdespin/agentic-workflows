@@ -231,7 +231,11 @@ class ExtensionHandler:
     """Work an extension contributes, addressable as ``.../handlers:<name>``.
 
     ``provide`` declares inputs ww collects from the agent before running the
-    handler, exactly as a configured CLI handler does.
+    handler, exactly as a configured CLI handler does.  ``validate`` judges
+    those inputs when the agent supplies them: it receives the handler's own
+    declared values and returns an error message to refuse them, or ``None``.
+    ww then rejects the completion carrying a refused value before saving
+    anything, so the agent corrects it instead of the handler failing later.
     """
 
     name: str
@@ -240,6 +244,7 @@ class ExtensionHandler:
     provide: tuple[ProvidedVariable, ...] = ()
     check: Callable[[ExtensionContext], ExtensionCheckResult] | None = None
     outputs: tuple[str, ...] = ()
+    validate: Callable[[Mapping[str, str]], str | None] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _VALUE_NAME.fullmatch(self.name):
@@ -250,6 +255,8 @@ class ExtensionHandler:
             raise TypeError("extension handler run must be callable")
         if self.check is not None and not callable(self.check):
             raise TypeError("extension handler check must be callable")
+        if self.validate is not None and not callable(self.validate):
+            raise TypeError("extension handler validate must be callable")
         if not isinstance(self.provide, tuple) or not all(
             isinstance(value, ProvidedVariable) for value in self.provide
         ):

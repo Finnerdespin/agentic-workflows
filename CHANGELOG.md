@@ -11,6 +11,19 @@ is in [documentation/limitations.md](documentation/limitations.md).
 
 ## 2026-09-27
 
+- A value supplied with `--variable` is now checked by the handler that will
+  consume it before the completion is saved. An extension handler may declare
+  `validate` beside `provide`; `ww/git` does so for `commit_message`, so a
+  multi-line subject now fails the `complete` command with
+  `commit_message must be a single line` and records nothing, where it used
+  to be accepted, fail inside `git-commit`, and leave the task for the
+  operator. The extension API change is additive.
+- Retrying a failed automatic handler that takes provided values no longer
+  replays the values it failed with. `next --retry`, and a plain `next` on
+  the failed task, ask for them again through the usual input request, which
+  now lists what the handler was given last time, so a wrong value is
+  corrected and a right one repeated. Before, the only way past a rejected
+  value was `next --force`.
 - A command handler can declare `idempotent: true`. When ww is interrupted
   while such a handler runs — the process died, the terminal closed, the
   machine went down — the next `next` replays the interrupted and unrun

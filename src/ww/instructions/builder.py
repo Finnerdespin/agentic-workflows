@@ -225,7 +225,16 @@ class InstructionBuilder:
         request = state.pending_input_request
         if request is None:  # pragma: no cover - validated state invariant
             raise ValueError("awaiting-input state requires an input request")
-        item = plan.items[_index_for_id(plan, request.item_id)]
+        index = _index_for_id(plan, request.item_id)
+        item = plan.items[index]
+        requested = {value.name for value in request.values}
+        # A retried handler asks for its values again; what it failed with is
+        # kept on its record so the page can show it.
+        previous_values = tuple(
+            (name, value)
+            for name, value in state.item_executions[index].supplied_values
+            if name in requested
+        )
         # The values describe the work done since this handler last ran in
         # this run: an earlier loop round's execution is in the history.
         last_run = max(
@@ -255,6 +264,7 @@ class InstructionBuilder:
             _base(state, item, item_status="awaiting_input"),
             gate_prompt=item.gate_prompt,
             required_values=request.values,
+            previous_values=previous_values,
             automatic_context=(item.name,),
             continuation_command=complete_command(
                 state.task_id,

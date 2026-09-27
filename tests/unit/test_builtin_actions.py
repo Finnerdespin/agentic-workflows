@@ -27,7 +27,8 @@ from ww.actions.command import CommandAction
 from ww.actions.contracts import CommandOutcome, CommandRequest
 from ww.discovery import AvailableActions
 from ww.errors import ConfigurationError, StateError
-from ww.extensions import ExtensionCheckResult, ExtensionResult
+from ww.extensions import ExtensionCheckResult, ExtensionHandler, ExtensionResult
+from ww.workflow_config import ProvidedVariable
 
 
 def _resolution(
@@ -630,3 +631,67 @@ def test_extension_definition_and_instruction() -> None:
     assert action.instruction(_EXTENSION, _context("Commit.")).text == "Commit."
     assert action.instruction(_EXTENSION, _context()).text == "step"
     assert action.traits(_EXTENSION).manual_attestation == {"values", "workspace"}
+
+
+# --- extension input validation ---------------------------------------------------
+
+
+@dataclass
+class _Handlers:
+    handler_: ExtensionHandler
+
+    def handler(self, reference: str) -> ExtensionHandler:
+        return self.handler_
+
+
+@dataclass
+class _InputContext:
+    extensions: _Handlers
+
+
+def _validate(validator: object, values: dict[str, str]) -> str | None:
+    handler = ExtensionHandler(
+        "publish",
+        lambda context: ExtensionResult(True),
+        provide=(ProvidedVariable("message"), ProvidedVariable("channel")),
+        validate=validator,  # type: ignore[arg-type]
+    )
+    return actions.get("extension").validate_inputs(
+        _EXTENSION,
+        values,
+        _InputContext(_Handlers(handler)),  # type: ignore[arg-type]
+    )
+
+
+def test_extension_without_a_validator_accepts_any_input() -> None:
+    assert _validate(None, {"message": "a\nb"}) is None
+
+
+def test_extension_validator_sees_only_its_own_declared_values() -> None:
+    seen: list[dict[str, str]] = []
+
+    def validator(values: object) -> None:
+        seen.append(dict(values))  # type: ignore[call-overload]
+
+    assert _validate(validator, {"message": "m", "other": "x"}) is None
+    assert seen == [{"message": "m"}]
+
+
+@pytest.mark.parametrize(
+    ("validator", "error"),
+    [
+        (lambda values: "message must be one line", "message must be one line"),
+        (lambda values: "  padded  ", "padded"),
+        (lambda values: 42, "extension validator returned an invalid result"),
+        (lambda values: "", "extension validator returned an invalid result"),
+    ],
+)
+def test_extension_validator_verdicts(validator: object, error: str) -> None:
+    assert _validate(validator, {"message": "a\nb"}) == error
+
+
+def test_extension_validator_exceptions_are_refusals() -> None:
+    def validator(values: object) -> None:
+        raise RuntimeError("boom")
+
+    assert _validate(validator, {"message": "m"}) == "RuntimeError: boom"

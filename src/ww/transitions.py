@@ -36,13 +36,27 @@ def retry_failed_item(
 ) -> ExecutionState:
     """Return the current failed item to pending for another attempt."""
     records = list(state.item_executions)
+    values = dict(state.workflow_values)
     if state.cursor < len(records):
+        record = records[state.cursor]
+        item = plan.items[state.cursor]
+        supplied = record.supplied_values
+        if item.owner == "ww" and item.execution == "automatic" and item.provide:
+            # The handler failed with the values it was given; ask for them
+            # again rather than replaying them.  They stay on the record so
+            # the request can show what was supplied last time.
+            previous = tuple(
+                (value.name, values.pop(value.name))
+                for value in item.provide
+                if value.name in values
+            )
+            supplied = previous or supplied
         # Commands are replaced in-place when a failed automatic item is
         # retried.  Preserve the prior attempt so its stream references remain
         # discoverable through the public artifact listing.
-        history = (*state.execution_history, records[state.cursor])
+        history = (*state.execution_history, record)
         records[state.cursor] = replace(
-            records[state.cursor], status="pending", error=None
+            record, status="pending", error=None, supplied_values=supplied
         )
     else:
         history = state.execution_history
@@ -53,6 +67,7 @@ def retry_failed_item(
             active_item_id=None,
             item_executions=tuple(records),
             execution_history=history,
+            workflow_values=tuple(values.items()),
             last_error=None,
             updated_at=now(),
         ),

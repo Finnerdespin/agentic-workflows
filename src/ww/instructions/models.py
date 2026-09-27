@@ -172,6 +172,8 @@ class Instruction:
     # Pending input on an input-only assignment: the manager supplies it.
     manager_input: bool = False
     required_values: tuple[ProvidedVariable, ...] = ()
+    # What a retried handler was given last time, per requested value.
+    previous_values: tuple[tuple[str, str], ...] = ()
     required_metadata: tuple[SavedMetadata, ...] = ()
     automatic_context: tuple[str, ...] = ()
     has_previous_artifacts: bool = False
@@ -275,6 +277,7 @@ class Instruction:
             "item_unique": list(self.item_unique),
             "manager_input": self.manager_input,
             "required_values": [value.to_dict() for value in self.required_values],
+            "previous_values": dict(self.previous_values),
             "required_metadata": [value.to_dict() for value in self.required_metadata],
             "automatic_context": list(self.automatic_context),
             "has_previous_artifacts": self.has_previous_artifacts,

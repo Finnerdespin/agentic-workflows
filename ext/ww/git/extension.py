@@ -639,13 +639,22 @@ def _without_rendered_prefix(
     return message
 
 
+def _commit_message_error(values: Mapping[str, str]) -> str | None:
+    """The one shape a subject must have; checked when supplied and when run."""
+    message = values.get("commit_message", "").strip()
+    if not message:
+        return "commit_message is required"
+    if "\n" in message or "\r" in message:
+        return "commit_message must be a single line"
+    return None
+
+
 def _commit(context: ExtensionContext) -> ExtensionResult:
     settings = settings_from(context.config)
-    message = context.values.get("commit_message", "").strip()
-    if not message:
-        return ExtensionResult(False, error="commit_message is required")
-    if "\n" in message or "\r" in message:
-        return ExtensionResult(False, error="commit_message must be a single line")
+    error = _commit_message_error(context.values)
+    if error is not None:
+        return ExtensionResult(False, error=error)
+    message = context.values["commit_message"].strip()
     message = _without_rendered_prefix(message, settings.commit_format, context)
     subject = interpolate(
         settings.commit_format, {**_tokens(context), "commit_message": message}
@@ -1074,6 +1083,7 @@ EXTENSION = Extension(
                 ),
             ),
             check=_check_commit,
+            validate=_commit_message_error,
         ),
         ExtensionHandler(
             "is-git-clean",

@@ -1172,6 +1172,20 @@ def _required_values(lines: Lines, instruction: Instruction) -> None:
                 "placeholder.",
             ]
         )
+    if instruction.previous_values:
+        lines.extend(
+            [
+                "",
+                "The handler failed with the values it was given last time. "
+                "Supply corrected ones, or the same again when the cause lay "
+                "elsewhere:",
+                "",
+                *(
+                    f"- `{name}`: {value.replace(chr(10), chr(92) + 'n')}"
+                    for name, value in instruction.previous_values
+                ),
+            ]
+        )
     if instruction.automatic_context:
         names = ", ".join(f"`{name}`" for name in instruction.automatic_context)
         lines.extend(

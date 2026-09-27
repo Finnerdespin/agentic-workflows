@@ -769,7 +769,16 @@ form a transaction, and atomic replacement alone cannot prevent lost updates.
 Unlike a shell handler, an extension handler has no per-command ledger: it is
 one unit, and an explicit retry re-runs it whole. The extension API can expose
 a tri-state checker for interrupted operations; checker errors remain unknown
-rather than becoming ordinary handler failures. The compiled item stores the
+rather than becoming ordinary handler failures. It can also expose an input
+validator for its `provide` values. Core runs it through
+`AutomaticAction.validate_inputs` from `complete`, before the step result or
+the values are saved, with a context that offers handler lookup only — no
+store, workspace, or effects — so a refused value is a refused completion,
+not a recorded failure. The same boundary makes retry honest about values: a
+failed automatic item that declares `provide` drops those values from the
+workflow values when it is returned to pending, keeping them on its record,
+so `drain` raises the ordinary input request again and the page can show what
+the handler was given last time. The compiled item stores the
 reference and declared output names rather than the callable, so a persisted
 snapshot stays readable without loading anyone's code, and an unknown extension
 or item fails at compile time — before a task exists.

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from ww.errors import ConfigurationError
@@ -26,6 +28,7 @@ from .contracts import (
     ExecutionContext,
     Extension,
     ExtensionBinding,
+    InputValidationContext,
     InstructionContent,
     InstructionContext,
     PreflightContext,
@@ -41,6 +44,31 @@ class ExtensionAction(AutomaticAction[Extension, Extension]):
 
     def preflight(self, planned: Extension, context: PreflightContext) -> None:
         context.extensions.validate_identity(planned)
+
+    def validate_inputs(
+        self,
+        planned: Extension,
+        values: Mapping[str, str],
+        context: InputValidationContext,
+    ) -> str | None:
+        """Let the handler's own ``validate`` judge its declared inputs."""
+        handler = context.extensions.handler(planned.reference)
+        if handler.validate is None:
+            return None
+        own = {
+            value.name: values[value.name]
+            for value in handler.provide
+            if value.name in values
+        }
+        try:
+            verdict = handler.validate(MappingProxyType(own))
+        except Exception as error:  # noqa: BLE001 - extension exceptions are refusals
+            return f"{type(error).__name__}: {error}"
+        if verdict is None:
+            return None
+        if not isinstance(verdict, str) or not verdict.strip():
+            return "extension validator returned an invalid result"
+        return verdict.strip()
 
     def execute(self, planned: Extension, context: ExecutionContext) -> ActionResult:
         handler = context.extensions.handler(planned.reference)

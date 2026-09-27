@@ -14,7 +14,7 @@ from tests.workflow_helpers import start_after_init
 from ww.actions import Extension, ExtensionAction, actions
 from ww.cli import main
 from ww.config import load_configuration
-from ww.errors import ConfigurationError
+from ww.errors import ConfigurationError, StateError
 from ww.extensions import ExtensionRegistry
 from ww.plan import compile_workflow_plan
 from ww.service import WorkflowService
@@ -131,6 +131,32 @@ EXTENSION = Extension(
 )
 """
 
+VALIDATING_EXTENSION = """
+from ww.extensions.api import (
+    Extension, ExtensionHandler, ExtensionResult, ProvidedVariable
+)
+
+def _publish(context):
+    context.store.write_text("published", context.values["message"])
+    return ExtensionResult(True, output="published")
+
+def _check_message(values):
+    if values.get("message") == "bad":
+        return "message must not be bad"
+    return None
+
+EXTENSION = Extension(
+    vendor="acme", name="checked",
+    handlers=(
+        ExtensionHandler(
+            "publish", _publish,
+            provide=(ProvidedVariable("message", "What to publish."),),
+            validate=_check_message,
+        ),
+    ),
+)
+"""
+
 ALTERNATE_BINDING_EXTENSION = """
 from ww.extensions.api import (
     Extension, ExtensionHandler, ExtensionResult, ExtensionVariable,
@@ -210,6 +236,60 @@ def _checking_service(root: Path) -> WorkflowService:
         encoding="utf-8",
     )
     return WorkflowService(Storage(root), extensions=ExtensionRegistry.discover(root))
+
+
+def _validating_service(root: Path) -> WorkflowService:
+    directory = root / "ext" / "acme" / "checked"
+    directory.mkdir(parents=True)
+    (directory / "extension.py").write_text(VALIDATING_EXTENSION, encoding="utf-8")
+    (root / "workflows.yaml").write_text(
+        """workflows:
+  - name: task
+    steps:
+      - name: work
+        prompt: true
+        hooks:
+          after_complete:
+            - name: ext/acme/checked/handlers:publish
+""",
+        encoding="utf-8",
+    )
+    return WorkflowService(Storage(root), extensions=ExtensionRegistry.discover(root))
+
+
+def test_a_refused_provided_value_fails_the_completion_and_saves_nothing(
+    tmp_path: Path,
+) -> None:
+    service = _validating_service(tmp_path)
+    start_after_init(service, "task", "TASK-CHECKED", agent="codex")
+    service.next("TASK-CHECKED")
+
+    with pytest.raises(StateError, match="publish rejected the supplied value"):
+        service.complete(
+            "TASK-CHECKED",
+            (("message", "bad"),),
+            "# work\n",
+            summary_for_next="Done.",
+        )
+
+    state = service.tasks.read_execution_state("TASK-CHECKED", "01-task")
+    assert state is not None
+    # The agent step is still open, nothing of the refused completion landed.
+    assert state.status == "in_progress"
+    assert state.item_executions[1].status == "in_progress"
+    assert state.item_executions[1].artifact is None
+    assert "message" not in dict(state.workflow_values)
+    assert not (tmp_path / ".ww/ext/acme/checked/published").exists()
+
+    accepted = service.complete(
+        "TASK-CHECKED",
+        (("message", "good"),),
+        "# work\n",
+        summary_for_next="Done.",
+    )
+
+    assert accepted.status != "failed"
+    assert (tmp_path / ".ww/ext/acme/checked/published").read_text() == "good"
 
 
 def test_an_extension_handler_compiles_as_automatic_ww_work(tmp_path: Path) -> None:

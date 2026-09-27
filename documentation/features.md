@@ -1621,6 +1621,29 @@ operation. Human-readable `output` is kept on the execution record; structured
 `values` must exactly match `outputs` declared by the handler and become
 available to later workflow actions as `{{greeting}}`. Invalid return types,
 undeclared values, and missing declared values fail the handler consistently.
+
+A handler that declares `provide` may also declare `validate`, a callable that
+receives the handler's own declared values as a mapping and returns an error
+message to refuse them or `None` to accept. ww calls it when the agent
+supplies the values, before the completion is saved, so a refused value comes
+back to the agent as a failed `complete` with that message instead of a
+handler failure the operator has to resolve. It runs with no store, no
+workspace, and no effects, and it does not replace the check the handler makes
+when it runs: `ww/git` declares one for `commit_message` and still checks the
+same rule in `git-commit`.
+
+```python
+def _subject_error(values):
+    if "\n" in values.get("commit_message", ""):
+        return "commit_message must be a single line"
+    return None
+
+ExtensionHandler(
+    "git-commit", _commit, provide=(ProvidedVariable("commit_message"),),
+    validate=_subject_error,
+)
+```
+
 The compiled plan also records the extension API/version, provider source,
 source fingerprint, and resolved settings. A resumed run uses those saved
 settings and refuses to dispatch if the extension's version, API version, or
@@ -1735,14 +1758,22 @@ settings, and summary.
 
 Every non-terminal Markdown instruction shows one role-specific continuation
 command. A completion screen may request values for upcoming automatic CLI
-handlers in the same assignment; pass each with `--variable name=value`. `ww`
+handlers in the same assignment; pass each with `--variable name=value`. Before
+anything is saved, ww hands each value to the handler that will consume it:
+a handler that declares a validator, such as `ww/git`'s `git-commit` for
+`commit_message`, refuses a value it would fail on, and the completion fails
+with the handler's own message and records nothing, so the agent corrects the
+value and completes again. `ww` then
 executes those handlers itself before it activates the next worker item or
 returns control to the manager. If an automatic command fails, the worker stops
 and reports the failure to the manager. The manager reports it to the ww
 operator for manual intervention; its instruction lists the two operator
 options, `next --retry` to run the handler again once the cause is fixed and
 `next --force --force-reason` to skip it, so the agent can run the one the
-operator chooses without guessing. `next --force` checks the task state before
+operator chooses without guessing. A retried handler that takes provided
+values does not replay the values it failed with: it asks for them again
+through the ordinary input request, which shows what it was given last time,
+so a wrong value is corrected and a right one repeated. `next --force` checks the task state before
 it asks for confirmation, and its prompt states what the force will do; a task
 that is neither failed, interrupted, nor stopped at a loop limit is refused
 without a prompt.

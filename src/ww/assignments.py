@@ -239,17 +239,25 @@ def active_assignment(
     return None
 
 
+def completion_window_items(
+    plan: WorkflowPlan, cursor: int, stop: int | None = None
+) -> tuple[PlanItem, ...]:
+    """Return the current item and the automatic items its completion feeds."""
+    items = [plan.items[cursor]]
+    for item in plan.items[cursor + 1 : stop]:
+        if item.owner == "agent" or workflow_transition(item) is not None:
+            break
+        items.append(item)
+    return tuple(items)
+
+
 def completion_window(
     plan: WorkflowPlan, cursor: int, stop: int | None = None
 ) -> tuple[tuple[ProvidedVariable, ...], tuple[str, ...]]:
     """Return inputs required to complete the current assignment boundary."""
-    required = list(plan.items[cursor].provide)
-    context: list[str] = []
-    for item in plan.items[cursor + 1 : stop]:
-        if item.owner == "agent" or workflow_transition(item) is not None:
-            break
-        required.extend(item.provide)
-        context.append(item.name)
+    items = completion_window_items(plan, cursor, stop)
+    required = [value for item in items for value in item.provide]
+    context = [item.name for item in items[1:]]
     names = [value.name for value in required]
     if len(names) != len(set(names)):
         raise StateError("completion window has duplicate provided variable names")

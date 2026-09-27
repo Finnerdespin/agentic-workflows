@@ -434,6 +434,15 @@ def test_extension_handler_outputs_are_normalized_and_unique() -> None:
         ExtensionHandler("bad", run, outputs=("not a name",))
 
 
+def test_extension_handler_validate_is_optional_but_must_be_callable() -> None:
+    run = lambda context: ExtensionResult(True)  # noqa: E731
+
+    assert ExtensionHandler("plain", run).validate is None
+    assert ExtensionHandler("checked", run, validate=lambda values: None).validate
+    with pytest.raises(TypeError, match="validate must be callable"):
+        ExtensionHandler("bad", run, validate="yes")  # type: ignore[arg-type]
+
+
 def test_extension_contribution_shapes_and_names_are_validated() -> None:
     run = lambda context: "ok"  # noqa: E731
 
