@@ -27,7 +27,7 @@ from ww.instructions.commands import (
 from ww.instructions.policy import Audience, audience
 from ww.output_adapters.base import OutputAdapter
 from ww.output_adapters.terminal import initialization_progress, terminal_accent
-from ww.results import InitializationResult, ResetResult
+from ww.results import NO_WORKFLOWS_ACTION, InitializationResult, ResetResult
 from ww.runtimes import requested_setting
 
 Lines = list[str]
@@ -106,7 +106,7 @@ class MarkdownOutputAdapter(OutputAdapter):
                 tuple(
                     action
                     for action in result.actions
-                    if action != "Define at least one workflow in workflows.yaml."
+                    if action != NO_WORKFLOWS_ACTION
                 ),
             ),
         ):
@@ -122,26 +122,33 @@ class MarkdownOutputAdapter(OutputAdapter):
                     "  https://github.com/from-developers-for-developers/agentic-workflows/blob/main/documentation/features.md#configuring-one",
                 ]
             )
+        lines.append("")
+        if result.permission_notice:
+            lines.extend(_permission_notice())
+        # Getting started matters only until the first workflow exists.
+        if NO_WORKFLOWS_ACTION in result.actions:
+            lines.extend(
+                [
+                    terminal_accent("Next steps"),
+                    "",
+                    "  " + terminal_accent("1. Create your first workflow"),
+                    "     Define the steps in workflows.yaml.",
+                    "",
+                    "  " + terminal_accent("2. Start developing with your agent"),
+                    "     For example, type:",
+                    "",
+                    "     /ww implement a user sign-in page",
+                    "",
+                    "  " + terminal_accent("Run commands manually"),
+                    "     Use the project launcher for any ww command:",
+                    "",
+                    "     ./ww workflows",
+                    "",
+                    *_initialization_shortcut(),
+                ]
+            )
         lines.extend(
             [
-                "",
-                *_permission_notice(),
-                terminal_accent("Next steps"),
-                "",
-                "  " + terminal_accent("1. Create your first workflow"),
-                "     Define the steps in workflows.yaml.",
-                "",
-                "  " + terminal_accent("2. Start developing with your agent"),
-                "     For example, type:",
-                "",
-                "     /ww implement a user sign-in page",
-                "",
-                "  " + terminal_accent("Run commands manually"),
-                "     Use the project launcher for any ww command:",
-                "",
-                "     ./ww workflows",
-                "",
-                *_initialization_shortcut(),
                 terminal_accent("Documentation"),
                 "",
                 "  " + terminal_accent("README"),
@@ -1374,13 +1381,17 @@ def _action_heading(instruction: Instruction) -> str:
     name = instruction.item_name or "workflow"
     reader = audience(instruction)
     if instruction.choosing_outcome_of is not None:
+        # Choosing is the manager's; the worker that assessed hands back.
+        if reader is Audience.WORKER_RETURNING:
+            return "return control to the manager"
         return f"choose the outcome of `{instruction.choosing_outcome_of}`"
     if instruction.loop_limit_reached:
         return f"escalate the `{name}` loop limit"
     if instruction.is_loop_control:
         return f"advance the `{name}` loop"
     if reader is Audience.MANAGER_DELEGATING:
-        return f"delegate the `{instruction.assignment_step or name}` assignment"
+        verb = "delegate" if instruction.subagents else "perform"
+        return f"{verb} the `{instruction.assignment_step or name}` assignment"
     if instruction.item_status == "pending":
         if reader is Audience.WORKER_RETURNING:
             return "return control to the manager"
@@ -1406,8 +1417,9 @@ def _assignment_coverage(instruction: Instruction) -> Lines:
     if not rest:
         return []
     names = ", ".join(f"`{name}`" for name in (first, *rest))
+    performer = "One worker performs" if instruction.subagents else "You perform"
     return [
-        f"This assignment covers, in order: {names}. One worker performs them "
+        f"This assignment covers, in order: {names}. {performer} them "
         "all; `ww` hands each one over after the previous completion.",
         "",
     ]
@@ -1454,6 +1466,14 @@ def _role_instruction(instruction: Instruction) -> Lines:
             ]
         case Audience.WORKER_RETURNING:
             return [_ASSIGNMENT_COMPLETE, ""]
+        case Audience.MANAGER_DELEGATING if not instruction.subagents:
+            return [
+                "You are the manager. This step sets `subagents: false`: perform "
+                "it yourself in this session, not through a worker, and run the "
+                "displayed worker completion command.",
+                "",
+                *_assignment_coverage(instruction),
+            ]
         case Audience.MANAGER_DELEGATING:
             return [
                 "You are the manager. Select the worker and give it the bootstrap "
@@ -1482,6 +1502,11 @@ def _role_instruction(instruction: Instruction) -> Lines:
         case Audience.MANAGER if instruction.choosing_outcome_of is not None:
             return [_RUN_MANAGER_COMMAND, ""]
         case Audience.MANAGER:
+            preview = instruction.assignment_preview
+            if preview and "selection_item_name" not in preview:
+                # No worker is selected for what comes next; the preview says
+                # who performs it.
+                return [_RUN_MANAGER_COMMAND, ""]
             return [
                 f"{_RUN_MANAGER_COMMAND} Pass "
                 "the complete response from `ww next` to the selected worker.",

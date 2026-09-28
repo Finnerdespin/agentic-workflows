@@ -9,12 +9,14 @@ from pathlib import Path
 import pytest
 
 from ww.cli import main
-from ww.defaults import AGENT_INSTRUCTIONS, WW_SKILL
+from ww.defaults import AGENT_INSTRUCTIONS, SKILLS
 from ww.errors import ConfigurationError, StateError
 from ww.extensions import Extension, ExtensionRegistry
 from ww.project_config import ProjectConfig
 from ww.service import WorkflowService
 from ww.storage import Storage
+
+WW_SKILL = SKILLS["ww"]
 
 WORKFLOWS = """modes:
   - name: economy
@@ -225,7 +227,7 @@ def test_init_installs_the_skill_into_existing_agent_directories(
     assert kept.read_text(encoding="utf-8") == "custom"
     assert not (tmp_path / ".gemini").exists()
     assert ".claude/skills/ww/SKILL.md" in output
-    assert "install the ww skill" not in output
+    assert "install the ww skills" not in output
 
 
 def test_init_without_skills_suggests_installing_them(
@@ -238,7 +240,7 @@ def test_init_without_skills_suggests_installing_them(
 
     assert not (tmp_path / ".claude/skills").exists()
     assert (
-        "Optionally install the ww skill with `init --skills` for: .claude." in output
+        "Optionally install the ww skills with `init --skills` for: .claude." in output
     )
     config = json.loads((tmp_path / "agentic-workflows.json").read_text())
     assert config["enabled"] is True
@@ -247,7 +249,7 @@ def test_init_without_skills_suggests_installing_them(
 def test_init_asks_before_installing_each_skill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ww.cli.initialization import _skill_paths
+    from ww.cli.initialization import _skill_installs
 
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".cursor").mkdir()
@@ -257,7 +259,7 @@ def test_init_asks_before_installing_each_skill(
         # Answer by what is being asked, not by position: the order and the
         # number of agent directories both change as integrations are added.
         prompts.append(prompt)
-        if ".claude/skills" in prompt:
+        if ".claude/skills?" in prompt:
             return ""  # accept the default, which is yes for a directory here
         if "Create which?" in prompt:
             return "none"
@@ -265,22 +267,22 @@ def test_init_asks_before_installing_each_skill(
 
     monkeypatch.setattr("builtins.input", answer)
 
-    paths = _skill_paths(Storage(tmp_path), None, interactive=True)
+    paths = _skill_installs(Storage(tmp_path), None, interactive=True)
 
-    assert paths == (".claude/skills/ww/SKILL.md",)
+    assert paths == ((".claude", "ww"),)
     # A directory that exists is asked about on its own...
-    assert "Install the ww skill into .claude/skills/ww/SKILL.md? [Y/n]: " in prompts
-    assert "Install the ww skill into .cursor/skills/ww/SKILL.md? [Y/n]: " in prompts
+    assert "Install the ww skills into .claude/skills? [Y/n]: " in prompts
+    assert "Install the ww skills into .cursor/skills? [Y/n]: " in prompts
     # ...and every agent without one shares a single question.
     assert "Create which? (comma-separated, or none): " in prompts
     assert len(prompts) == 3
-    assert _skill_paths(Storage(tmp_path), False, interactive=True) == ()
+    assert _skill_installs(Storage(tmp_path), False, interactive=True) == ()
 
 
 def test_init_offers_the_absent_agent_directories_in_one_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ww.cli.initialization import _known_agent_directories, _skill_paths
+    from ww.cli.initialization import _known_agent_directories, _skill_installs
 
     prompts: list[str] = []
 
@@ -290,18 +292,18 @@ def test_init_offers_the_absent_agent_directories_in_one_question(
 
     monkeypatch.setattr("builtins.input", answer)
 
-    paths = _skill_paths(Storage(tmp_path), None, interactive=True)
+    paths = _skill_installs(Storage(tmp_path), None, interactive=True)
 
     # One question, not one per agent ww knows about.
     assert len(prompts) == 1
     assert len(_known_agent_directories()) > 1
-    assert paths == (".codex/skills/ww/SKILL.md", ".claude/skills/ww/SKILL.md")
+    assert paths == ((".codex", "ww"), (".claude", "ww"))
 
 
 def test_declining_every_agent_directory_takes_one_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ww.cli.initialization import _skill_paths
+    from ww.cli.initialization import _skill_installs
 
     prompts: list[str] = []
 
@@ -311,8 +313,94 @@ def test_declining_every_agent_directory_takes_one_answer(
 
     monkeypatch.setattr("builtins.input", answer)
 
-    assert _skill_paths(Storage(tmp_path), None, interactive=True) == ()
+    assert _skill_installs(Storage(tmp_path), None, interactive=True) == ()
     assert len(prompts) == 1
+
+
+def _answers(monkeypatch: pytest.MonkeyPatch, reply: str) -> list[str]:
+    """Answer every init question with ``reply`` and record the questions."""
+    prompts: list[str] = []
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return reply
+
+    monkeypatch.setattr("builtins.input", answer)
+    return prompts
+
+
+@pytest.mark.parametrize(("reply", "installed"), [("", True), ("n", False)])
+def test_a_newly_bundled_skill_is_offered_once_into_the_chosen_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reply: str, installed: bool
+) -> None:
+    from ww.cli.initialization import _skill_installs
+
+    (tmp_path / ".claude").mkdir()
+    # Yes for the existing .claude directory, none of the absent ones.
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: "none" if "Create which?" in prompt else "y",
+    )
+    assert _skill_installs(Storage(tmp_path), None, interactive=True) == (
+        (".claude", "ww"),
+    )
+
+    # A later ww version bundles another skill.
+    monkeypatch.setitem(SKILLS, "extra", "---\nname: extra\n---\n")
+    prompts = _answers(monkeypatch, reply)
+    installs = _skill_installs(Storage(tmp_path), None, interactive=True)
+
+    # One question, about the skill only: the directories are remembered.
+    assert prompts == ["ww now ships the `extra` skill. Install into .claude? [Y/n]: "]
+    assert ((".claude", "extra") in installs) is installed
+    # Either answer is remembered, so the next run asks nothing.
+    prompts = _answers(monkeypatch, "y")
+    assert _skill_installs(Storage(tmp_path), None, interactive=True) == installs
+    assert prompts == []
+
+
+def test_a_project_set_up_before_skills_were_remembered_is_asked_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ww.cli.initialization import _known_agent_directories, _skill_installs
+
+    (tmp_path / ".claude/skills/ww").mkdir(parents=True)
+    (tmp_path / ".claude/skills/ww/SKILL.md").write_text("ww", encoding="utf-8")
+    choices = tmp_path / ".ww/init-choices.json"
+    choices.parent.mkdir()
+    agents = {name: name == ".claude" for name in _known_agent_directories()}
+    choices.write_text(json.dumps({"agents": agents}), encoding="utf-8")
+    monkeypatch.setitem(SKILLS, "extra", "---\nname: extra\n---\n")
+
+    prompts = _answers(monkeypatch, "")
+    installs = _skill_installs(Storage(tmp_path), None, interactive=True)
+
+    # The installed ww skill counts as accepted; only the new one is asked.
+    assert prompts == ["ww now ships the `extra` skill. Install into .claude? [Y/n]: "]
+    assert installs == ((".claude", "ww"), (".claude", "extra"))
+
+
+def test_the_permission_notice_is_shown_once_and_next_steps_until_a_workflow(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    init = ["--root", str(tmp_path), "init", "--no-input"]
+
+    assert main(init) == 0
+    first = capsys.readouterr().out
+    assert "ACTION NEEDED" in first
+    assert "Next steps" in first
+
+    (tmp_path / "workflows.yaml").write_text(
+        "workflows:\n  - name: task\n    steps:\n      - work: Work.\n",
+        encoding="utf-8",
+    )
+    assert main(init) == 0
+    second = capsys.readouterr().out
+    assert "ACTION NEEDED" not in second
+    assert "Next steps" not in second
+    # The documentation links always stay.
+    assert "Documentation" in second
+    assert "documentation/specification.md" in second
 
 
 def test_discover_tells_agents_to_use_the_ticket_key(

@@ -92,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--skills",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Install the ww skill into every agent directory found in the project.",
+        help="Install the ww skills into every agent directory found in the project.",
     )
 
     subparsers.add_parser(
