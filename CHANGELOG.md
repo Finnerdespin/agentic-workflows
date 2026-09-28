@@ -11,6 +11,8 @@ is in [documentation/limitations.md](documentation/limitations.md).
 
 ## 2026-09-28
 
+- Tasks saved by another ww version load again, and `init` offers a new skill
+  once and repeats its setup notes only when they apply. `a381d2d`
 - An assessment outcome can be `stop_workflow: true`, ending the run when
   chosen; before, only the compact form's `negative` could.
 - An assessment with declared outcomes now accepts `positive`, `negative`, and
