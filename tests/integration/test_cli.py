@@ -1041,10 +1041,10 @@ def test_current_reformatted_project_file_compiles_without_running_handlers(
         for item in items
         if item["phase"] == "before_complete_workflow"
     ] == [
-        ("update-architecture-documentation", "agent"),
-        ("update-readme", "agent"),
-        ("update-feature-documentation", "agent"),
-        ("update-yaml-specification", "agent"),
+        ("update-documentation", "agent"),
+        ("update-agent-instructions", "agent"),
+        ("git-commit", "ww"),
+        ("update-changelog", "agent"),
         ("git-commit", "ww"),
         ("update-workflow-summary", "agent"),
     ]

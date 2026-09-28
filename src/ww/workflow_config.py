@@ -231,6 +231,21 @@ class HandlerDefinition:
     model: str | None = None
     reasoning: str | None = None
 
+    @property
+    def is_reference(self) -> bool:
+        """Whether this only names a root or extension handler to run.
+
+        With no action, description, or values of its own, a hook or handler
+        entry such as ``- update-readme: ~`` stands for the handler it names.
+        """
+        return not (
+            self.action is not None
+            or self.operation is not None
+            or self.description
+            or self.provide
+            or self.save_metadata
+        )
+
 
 @dataclass(frozen=True)
 class HookDefinition:
