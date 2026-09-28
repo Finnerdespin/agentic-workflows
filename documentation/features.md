@@ -322,8 +322,49 @@ declared route with `ww next <task-id> --outcome <label> --role manager`.
 
 Every outcome uses one ordinary step shape: a global `handler`, an inline
 action, `handlers`, or nested `steps`. Outcome work types are mutually
-exclusive. For a simple gate, `- assess: <question>` accepts `positive` or
+exclusive. After the chosen outcome's work, the workflow continues with the
+step after `assess`. An outcome that should end the run instead is
+`stop_workflow: true` on its own:
+
+```yaml
+- assess:
+    question: Were conflicts resolved in non-trivial code?
+    outcomes:
+      positive:
+        steps:
+          - review: Review the resolutions.
+      negative:
+        stop_workflow: true
+```
+
+Choosing it completes the workflow, skipping every later step and hook. An
+assessment needs at least one outcome with work; one that only stops is the
+compact form.
+
+A gate declares only the outcome that has work. `positive`, `negative`, and
+`mixed` are accepted whether declared or not, and an undeclared one runs nothing
+and continues after the assessment:
+
+```yaml
+- assess:
+    question: Were conflicts resolved in non-trivial code?
+    outcomes:
+      positive:
+        steps:
+          - review: Review the resolutions.
+- verify: Run the tests.
+```
+
+Here `negative` and `mixed` go straight to `verify`. A label of your own, such
+as `partial`, is accepted only when declared. For a simple gate, `- assess: <question>` accepts `positive` or
 `negative`; positive continues normally and negative completes the workflow.
+
+The agent sees the choice before it answers: the assessment's page lists each
+outcome and what it does, for example "`negative` — ends the workflow here".
+Once the assessment is complete, the next page asks for the outcome and shows
+one `next --outcome <label>` command per outcome, never a plain `next`, which
+ww would refuse. A delegating manager chooses it itself; no worker preview is
+shown until the outcome decides which work comes next.
 
 `profile` may be a name or a mapping containing `name` and/or `description`.
 The mapping form supplies an inline description. ww resolves a named profile by
@@ -600,6 +641,50 @@ failure handling: a crash halfway through the split can no longer leave stories
 without children, and a retried request that already bound its child simply
 reports the bound task. A child added with an explicit `--id` skips the request,
 as an explicit ID does for `start`.
+
+## Inheriting a workflow
+
+A workflow that should do exactly what another does, but branch or merge
+differently, inherits it instead of repeating it:
+
+```yaml
+workflows:
+  - hotfix: Fix a bug on main.
+    steps:
+      - investigate: Find the cause.
+      - fix: Fix it.
+  - bugfix: Fix a bug on dev.
+    inherit: hotfix
+```
+
+`bugfix` gets `hotfix`'s steps, workflow hooks, modes, runtime, and every other
+setting. Its own keys replace the copied ones, so it can change its
+description, runtime, or recommendation; it cannot declare `steps` or `hooks`,
+because a workflow with other steps is a workflow of its own. A global hook
+filtered to `workflows: [hotfix]` also runs for `bugfix`, and for anything that
+inherits `bugfix` in turn. Only the name differs, and that is the point:
+`ww/git` reads `branch_name_formats.bugfix` and `base_branches.bugfix`, so the
+copy branches from and names its branches after its own entries. `discover`
+marks the copy with "Same steps as `hotfix`."
+
+## Recommending the next workflow
+
+A workflow that is usually followed by another names it:
+
+```yaml
+- hotfix: Fix a bug on main.
+  recommended_next_workflow: merge-to-dev
+  steps:
+    - fix: Fix it.
+```
+
+When a `hotfix` run completes, its page tells the agent not to start anything
+on its own but to ask the operator, through its choice menu, whether to start
+`merge-to-dev` on the same task, and shows the `start` command to run if they
+agree. Nothing starts without that answer. An inheriting workflow keeps the
+recommendation unless it sets its own, or `recommended_next_workflow: ~` to
+clear it. A `handoff` workflow already starts its successor and cannot
+recommend one.
 
 ## Hooks, variables, and transitions
 

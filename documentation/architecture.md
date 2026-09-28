@@ -27,7 +27,11 @@ The built-in frontend in `../src/ww/config/` parses `../workflows.yaml` into the
 immutable definitions in `../src/ww/workflow_config.py`; another notation can
 produce those definitions directly through the same loader contract. Shared
 cross-definition rules live in `../src/ww/workflow_validation.py`, so notation
-parsers do not acquire different workflow semantics. The service receives its
+parsers do not acquire different workflow semantics. `inherit` is resolved
+by the YAML frontend itself, once every workflow is parsed: the heir becomes a
+complete copy with its own settings on top, and global hooks filtered to a
+workflow are extended to its heirs, so validation, the compiler, `plan`, and
+`discover` only ever see complete definitions. The service receives its
 configuration loader at its composition boundary and does not know which
 notation produced the model. The `WorkflowPlanCompiler` in `../src/ww/plan/`
 validates that model again at its public boundary, then exclusively resolves
@@ -151,7 +155,17 @@ declared label through `next --outcome`; execution activates only that subtree
 and records all alternatives as skipped. This makes the decision explicit and
 auditable while preserving normal substep lifecycles, artifacts, and recovery.
 The compact assessment has the same boundary without a subtree: a positive
-outcome continues normally and a negative outcome completes the workflow.
+outcome continues normally and a negative outcome completes the workflow. A
+declared outcome with `stop_workflow: true` compiles to no subtree at all; the
+assessment item lists it among its outcomes and its stops, and selecting it
+completes the workflow the way compact `negative` does.
+`../src/ww/assessments.py` is the single reading of that plan data: which
+outcomes exist, what each does, and whether a completed assessment is waiting
+for one. It also supplies the standard answers an assessment does not declare,
+which select no subtree: the transition skips every outcome's work and moves
+the cursor past it. The transition that applies an outcome and the instruction pages that
+ask for it both use it, so the page never offers a command the transition
+refuses.
 
 ## Handlers and discovery
 
@@ -547,6 +561,15 @@ task document's handoff value remains the guard that keeps chained handoffs out.
 General nested workflow calls are still outside the execution model; workflow-level
 `workflows` keys are rejected by the YAML frontend rather than represented in
 the normalized domain model.
+
+`recommended_next_workflow` is the operator-confirmed counterpart of a handoff.
+The compiler freezes it into the plan, so a finished run keeps offering the
+same successor after the configuration changes, and the completed page asks the
+operator through the agent's choice menu before showing the `start` command for
+the same task. Nothing in core starts it: the agent does, with an ordinary
+`start`, only on the operator's answer. Validation rejects a recommendation
+that names no workflow or that sits on a handoff workflow, whose successor is
+already fixed.
 
 Related run state is committed through the storage adapter as one logical
 transition. The filesystem storage adapter atomically publishes

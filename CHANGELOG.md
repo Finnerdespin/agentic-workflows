@@ -11,6 +11,23 @@ is in [documentation/limitations.md](documentation/limitations.md).
 
 ## 2026-09-28
 
+- An assessment outcome can be `stop_workflow: true`, ending the run when
+  chosen; before, only the compact form's `negative` could.
+- An assessment with declared outcomes now accepts `positive`, `negative`, and
+  `mixed` even when it does not declare them; an undeclared one runs nothing
+  and continues, so a gate needs no placeholder branch.
+- Assessment pages now list the outcomes and what each does, and the page
+  after an assessment offers one `next --outcome` command per outcome instead
+  of a plain `next` that ww refused. A repeated `next` after choosing no
+  longer asks for the outcome again.
+
+- A workflow can `inherit` another: it copies its steps, hooks, and settings,
+  including global hooks filtered to it, and differs only by name, and so by
+  its `ww/git` branch and base entries.
+- `recommended_next_workflow` offers a workflow when a run completes; the
+  agent asks the operator through its choice menu and starts it on the same
+  task only on confirmation.
+
 - `ww/git`: `base_branch` is replaced by a `default` entry in `base_branches`,
   as in `branch_name_formats`. A config still using `base_branch` is refused
   with a pointer to the new form.

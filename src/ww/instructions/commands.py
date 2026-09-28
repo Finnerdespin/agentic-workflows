@@ -48,6 +48,7 @@ def next_command(
     selected_agent: str | None = None,
     model: str | None = None,
     reasoning: str | None = None,
+    outcome: str | None = None,
 ) -> str:
     """The manager command that advances a task, with optional recovery flags."""
     parts = ["next", _arg(task_id)]
@@ -60,6 +61,7 @@ def next_command(
         ("--selected-agent", selected_agent),
         ("--model", model),
         ("--reasoning", reasoning),
+        ("--outcome", outcome),
     ):
         if value is not None:
             parts.extend((flag, _arg(value)))
@@ -74,6 +76,22 @@ def instruction_command(
         parts.extend(("--run", _arg(run_id)))
     parts.extend(("--role", role))
     return _command(*parts)
+
+
+def start_command(task_id: str | None, workflow: str, agent: str) -> str:
+    """Start ``workflow``; without ``task_id`` ww assigns one."""
+    return _command(
+        "start",
+        *((_arg(task_id),) if task_id is not None else ()),
+        "--workflow",
+        _arg(workflow),
+        "--agent",
+        _arg(agent),
+        "--init-artifact",
+        '"<the request, normalized>"',
+        "--role",
+        "manager",
+    )
 
 
 def artifacts_command(task_id: str, run_id: str | None = None) -> str:
