@@ -7,8 +7,9 @@
       "use_separate_branch": true,
 
       "base_branches": {
-        "default": "main",
-        "hotfix": "dev"
+        "default": "dev",
+        "hotfix": "main",
+        "bugfix": "dev"
       },
 
       "branch_name_formats": {

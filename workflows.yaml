@@ -77,6 +77,7 @@ workflows:
       - run-tests: ~
 
   - hotfix: Fix a reported bug, from finding its cause to a tested commit.
+    recommended_next_workflow: merge-to-dev
     steps:
       - investigate: >-
           Find out why the bug happens and under which circumstances. Reproduce
@@ -87,6 +88,46 @@ workflows:
 
       - check-code-quality: ~
       - run-tests: ~
+
+  # Works in the primary checkout with plain git: ww/git has no merge handler,
+  # and its handlers would select the task's own worktree instead.
+  - merge-to-dev: Merge a requested branch into dev and leave dev passing.
+    steps:
+      - merge: >-
+          Merge the branch the task requirements name into dev, in the
+          repository's primary checkout; if they name no branch, ask the
+          operator which one. First make sure the checkout has no uncommitted
+          changes, and note the branch it is on. Switch to dev, fast-forward it
+          from its remote with `git pull --ff-only` when it has one, and run
+          `git merge --no-ff <branch>`. Resolve every conflict so that the
+          intent of both sides survives, then conclude the merge commit. In the
+          artifact, list each conflicted file and how you resolved it. Do not
+          push.
+        subagents: false
+
+      # Only a non-trivial conflict resolution is new code worth reviewing.
+      - assess:
+          question: >-
+            Did the merge resolve conflicts in non-trivial code, beyond
+            imports, formatting, or changelog entries?
+          outcomes:
+            positive:
+              steps:
+                - review-resolutions: >-
+                    Review each conflict resolution the merge artifact lists
+                    against both branches: neither side's intent may be lost,
+                    and no logic may be duplicated or dropped. Fix what is
+                    wrong.
+
+      - check-code-quality: ~
+      - run-tests: ~
+
+      - finish: >-
+          If the quality and test rounds changed anything, commit it on dev as
+          "{{__task_id}}: Fix the build after merging <branch>", naming the
+          merged branch. Then switch the primary checkout back to the branch it
+          was on before the merge. Do not push.
+        depends_on: merge
 
   - auto-refactor: >-
       Review the development since the last refactoring and reshape the
