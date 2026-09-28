@@ -4,9 +4,12 @@
   "extensions": {
     "ww/git": {
       "commit_format": "{{task_id}}: {{commit_message}}",
-
-      "base_branch": "main",
       "use_separate_branch": true,
+
+      "base_branches": {
+        "default": "main",
+        "hotfix": "dev"
+      },
 
       "branch_name_formats": {
         "default": "feature/{{task_id}}",

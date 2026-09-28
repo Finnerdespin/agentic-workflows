@@ -696,7 +696,7 @@ def test_init_enables_git_with_safe_defaults(tmp_path: Path, capsys) -> None:
 
     assert settings == {
         "commit_message": "{{task_id}}: {{commit_message}}",
-        "base_branch": "master",
+        "base_branches": {"default": "master"},
         "use_separate_branch": True,
         "branch_name_formats": {"default": "feature/{{task_id}}"},
         "worktrees": False,

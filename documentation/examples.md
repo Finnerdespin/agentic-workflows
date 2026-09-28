@@ -388,8 +388,7 @@ workflows:
   "extensions": {
     "ww/git": {
       "commit_format": "{{task_id}}: {{commit_message}}",
-      "base_branch": "main",
-      "base_branches": {"hotfix": "release"},
+      "base_branches": {"default": "main", "hotfix": "release"},
       "use_separate_branch": true,
       "branch_name_formats": {
         "default": "feature/{{task_id}}",
@@ -419,7 +418,7 @@ task works, and the git extension follows.
   "extensions": {
     "ww/git": {
       "use_separate_branch": true,
-      "base_branch": "main",
+      "base_branches": {"default": "main"},
       "project_base_branches": {"frontend": "master"},
       "branch_name_formats": {"default": "feature/{{task_id}}"}
     }

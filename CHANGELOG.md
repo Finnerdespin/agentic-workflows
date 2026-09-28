@@ -9,6 +9,14 @@ The package version stays at 0.1.0 while the release process is not yet in
 place. What may change between two pulls, and what ww does not promise yet,
 is in [documentation/limitations.md](documentation/limitations.md).
 
+## 2026-09-28
+
+- `ww/git`: `base_branch` is replaced by a `default` entry in `base_branches`,
+  as in `branch_name_formats`. A config still using `base_branch` is refused
+  with a pointer to the new form.
+- A hook that names a handler defining a `loop`, `steps`, or `items` is now
+  rejected; it used to run as a one-word prompt without its loop.
+
 ## 2026-09-27
 
 - A value supplied with `--variable` is now checked by the handler that will

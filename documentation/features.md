@@ -544,8 +544,8 @@ before.
 The `ww/git` extension follows the working directory: branches, worktrees, and
 commits act on the repository the task works in, and a task in a worktree still
 resolves to that repository's primary checkout. `project_base_branches` gives a
-project its own base branch, taking precedence over `base_branches` and
-`base_branch`. Branch formats and commit subjects are not split by project.
+project its own base branch, taking precedence over every `base_branches`
+entry. Branch formats and commit subjects are not split by project.
 
 ## External task IDs
 
@@ -1482,8 +1482,8 @@ separate from `../workflows.yaml`, which describes what a workflow *does*:
   "extensions": {
     "ww/git": {
       "commit_message": "{{task_id}}: {{commit_message}}",
-      "base_branch": "main",
       "base_branches": {
+        "default": "main",
         "bugfix": "develop",
         "task": {"argv": ["./scripts/base-branch", "{{workflow}}"]}
       },
@@ -1513,10 +1513,12 @@ rendered by `worktree_dir` and `worktree_name_format`. For example, an existing
 `worktrees/TASK-1` makes the next `{digit}`-formatted task use `TASK-2`, rather
 than adopting that checkout for a new task.
 
-`base_branch` is the global fallback. `base_branches` maps exact workflow names
-to overrides, `project_base_branches` maps configured project names to overrides
-that take precedence over both, and each value may be either a literal branch
-name or an object with a non-empty `argv` array. An argv command runs directly without a shell in
+`base_branches` maps exact workflow names to base branches, and its `default`
+entry covers every other workflow, the same shape as `branch_name_formats`.
+`project_base_branches` maps configured project names to base branches that
+take precedence over it. Each value may be either a literal branch name or an
+object with a non-empty `argv` array. A top-level `base_branch` is refused
+with a message pointing at `base_branches.default`, which replaced it. An argv command runs directly without a shell in
 the project root; its single non-empty stdout line becomes the base branch.
 Arguments may interpolate `{{task_id}}`, `{{workflow}}`, and `{{run_id}}`.
 The resolved base is recorded with the task branch so retries, worktree creation,
@@ -1542,8 +1544,8 @@ instead of silently falling back.
 | Handler | Settings it acts on |
 | --- | --- |
 | `git-commit` | `commit_format` |
-| `start-task-branch` | `base_branch`, `base_branches`, `project_base_branches`, `use_separate_branch`, `branch_name_formats`, `worktrees`, `worktree_dir`, `worktree_name_format` |
-| `return-to-base-branch` | `base_branch`, `base_branches`, `project_base_branches`, `use_separate_branch` |
+| `start-task-branch` | `base_branches`, `project_base_branches`, `use_separate_branch`, `branch_name_formats`, `worktrees`, `worktree_dir`, `worktree_name_format` |
+| `return-to-base-branch` | `base_branches`, `project_base_branches`, `use_separate_branch` |
 | `remove-task-worktree` | `worktrees` |
 | `is-git-clean` | — |
 
