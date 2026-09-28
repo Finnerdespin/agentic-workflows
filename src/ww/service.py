@@ -39,7 +39,8 @@ from ww.defaults import (
     DEFAULT_PROJECT_CONFIG_JSON,
     DEFAULT_WORKFLOWS_YAML,
     PROJECT_LAUNCHER,
-    WW_SKILL,
+    SKILLS,
+    skill_location,
 )
 from ww.documents import DocumentStore
 from ww.errors import ConfigurationError, StateError
@@ -2050,16 +2051,19 @@ class WorkflowService:
         workflows: str = DEFAULT_WORKFLOWS_YAML,
         project_config: str = DEFAULT_PROJECT_CONFIG_JSON,
         ignore_runtime: bool = False,
-        skill_paths: tuple[str, ...] = (),
+        skill_installs: tuple[tuple[str, str], ...] = (),
     ) -> InitializationResult:
+        """Create the project files, with each chosen skill in its directory."""
         return self.storage.initialize_project(
             workflows,
             project_config,
             PROJECT_LAUNCHER,
             AGENT_INSTRUCTIONS,
             ignore_runtime=ignore_runtime,
-            skill=WW_SKILL,
-            skill_paths=skill_paths,
+            skills=tuple(
+                (skill_location(directory, name), SKILLS[name])
+                for directory, name in skill_installs
+            ),
         )
 
     def drain(

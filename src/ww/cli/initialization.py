@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from ww.defaults import WW_SKILL_NAME
+from ww.defaults import SKILLS, WW_SKILL_NAME, skill_location
 from ww.discovery import AGENT_DIRECTORIES
 from ww.errors import StateError
 from ww.output_adapters.terminal import initialization_progress
@@ -105,7 +105,7 @@ def _link_agent_instructions(
 
 def _initialization_options(
     storage: Storage, args: argparse.Namespace
-) -> tuple[str, str, bool, tuple[str, ...]]:
+) -> tuple[str, str, bool, tuple[tuple[str, str], ...]]:
     interactive = not args.no_input and not args.json_output and sys.stdin.isatty()
     task_kind = args.task_id_format
     if task_kind is None and interactive and not _configured_task_format(storage):
@@ -234,12 +234,16 @@ def _initialization_options(
         workflows,
         json.dumps(project, indent=2) + "\n",
         bool(ignore_runtime),
-        _skill_paths(storage, args.skills, interactive, progress=True),
+        _skill_installs(storage, args.skills, interactive, progress=True),
     )
 
 
 def _skill_location(directory: str) -> str:
-    return f"{directory}/skills/{WW_SKILL_NAME}/SKILL.md"
+    """The ``ww`` skill, whose presence marks a directory as already set up."""
+    return skill_location(directory, WW_SKILL_NAME)
+
+
+_SKILL_NAMES = " and ".join(SKILLS)
 
 
 def _agent_directories(storage: Storage) -> tuple[str, ...]:
@@ -256,21 +260,102 @@ def _known_agent_directories() -> tuple[str, ...]:
     return (".agents", *dict.fromkeys(AGENT_DIRECTORIES.values()))
 
 
-def _skill_paths(
+def _skill_installs(
+    storage: Storage,
+    requested: bool | None,
+    interactive: bool,
+    *,
+    progress: bool = False,
+) -> tuple[tuple[str, str], ...]:
+    """Pair each chosen agent directory with each skill it should hold.
+
+    The directories are chosen once and remembered. The skills are the
+    bundled ones the operator accepted, also remembered, so a skill that a
+    later ww version bundles is offered once on its own, into the directories
+    already chosen, without choosing agents again.
+    """
+    saved = _init_choices(storage).get("agents", {})
+    fresh = not any(
+        isinstance(saved, dict) and isinstance(saved.get(directory), bool)
+        for directory in _known_agent_directories()
+    )
+    directories = _skill_directories(storage, requested, interactive, progress=progress)
+    names = _accepted_skills(
+        storage, directories, requested, interactive, fresh=fresh, progress=progress
+    )
+    return tuple((directory, name) for directory in directories for name in names)
+
+
+def _accepted_skills(
+    storage: Storage,
+    directories: tuple[str, ...],
+    requested: bool | None,
+    interactive: bool,
+    *,
+    fresh: bool,
+    progress: bool,
+) -> tuple[str, ...]:
+    """The bundled skills to install, asking only about ones never offered.
+
+    A first run offers every bundled skill through the directory question. A
+    project set up before skills were remembered counts a skill found in a
+    chosen directory as accepted. Either answer to a new skill is remembered,
+    so it is asked about once.
+    """
+    if requested is False or not directories:
+        return ()
+    saved = _init_choices(storage).get("skills")
+    decided: dict[str, bool] = (
+        {name: value for name, value in saved.items() if isinstance(value, bool)}
+        if isinstance(saved, dict)
+        else {}
+    )
+    if not isinstance(saved, dict):
+        present = {
+            name
+            for name in SKILLS
+            for directory in directories
+            if (storage.root / skill_location(directory, name)).exists()
+        }
+        decided = {
+            name: True for name in SKILLS if fresh or requested or name in present
+        }
+    new = [name for name in SKILLS if name not in decided]
+    if new:
+        accept = True
+        if interactive and not requested:
+            label = ", ".join(f"`{name}`" for name in new)
+            plural = "s" if len(new) > 1 else ""
+            accept = _ask_yes_no(
+                _progress(
+                    progress,
+                    55,
+                    f"ww now ships the {label} skill{plural}. Install into "
+                    f"{', '.join(directories)}? [Y/n]: ",
+                ),
+                True,
+            )
+        decided.update({name: accept for name in new})
+    _save_init_choice(storage, "skills", decided)
+    return tuple(name for name in SKILLS if decided.get(name))
+
+
+def _skill_directories(
     storage: Storage,
     requested: bool | None,
     interactive: bool,
     *,
     progress: bool = False,
 ) -> tuple[str, ...]:
-    """Choose where to install the ww skill, one agent directory at a time.
+    """Choose the agent directories that receive the bundled skills.
 
-    Existing skill files are included so initialization reports them as
-    preserved; storage never overwrites them.
+    Directories already holding the ``ww`` skill are included so
+    initialization reports their files as preserved and adds any skill that
+    is missing; storage never overwrites them.
     """
     saved = _init_choices(storage).get("agents", {})
     choices = dict(saved) if isinstance(saved, dict) else {}
-    paths: list[str] = []
+    chosen_directories: list[str] = []
     directories = _known_agent_directories()
     undecided: list[tuple[str, bool]] = []
     for directory in directories:
@@ -291,15 +376,15 @@ def _skill_paths(
             choices[directory] = selected
             _save_init_choice(storage, "agents", choices)
         if selected is True:
-            paths.append(location)
+            chosen_directories.append(directory)
     if undecided:
         chosen = _choose_agent_directories(undecided, progress)
         for directory, _ in undecided:
             choices[directory] = directory in chosen
             if directory in chosen:
-                paths.append(_skill_location(directory))
+                chosen_directories.append(directory)
         _save_init_choice(storage, "agents", choices)
-    return tuple(paths)
+    return tuple(chosen_directories)
 
 
 def _choose_agent_directories(
@@ -314,7 +399,7 @@ def _choose_agent_directories(
     if _interactive_terminal():
         return set(
             _ask_checklist(
-                "\nInstall the ww skill into which agent directories?",
+                f"\nInstall the {_SKILL_NAMES} skills into which agent directories?",
                 tuple(
                     (directory, "already present" if exists else "", exists)
                     for directory, exists in undecided
@@ -329,7 +414,7 @@ def _choose_agent_directories(
             _progress(
                 progress,
                 55,
-                f"Install the ww skill into {_skill_location(directory)}? [Y/n]: ",
+                f"Install the {_SKILL_NAMES} skills into {directory}/skills? [Y/n]: ",
             ),
             True,
         )
@@ -461,8 +546,9 @@ def _git_base_branch(root: Path) -> str:
 
 
 def _finish_initialization(
-    storage: Storage, result: InitializationResult
+    storage: Storage, result: InitializationResult, *, shown: bool = True
 ) -> InitializationResult:
+    """Complete the result; ``shown`` means the operator reads the summary."""
     created = list(result.created)
     actions = list(result.actions)
     try:
@@ -499,8 +585,17 @@ def _finish_initialization(
     ]
     if missing:
         actions.append(
-            "Optionally install the ww skill with `init --skills` for: "
-            + ", ".join(missing)
-            + "."
+            f"Optionally install the {_SKILL_NAMES} skills with `init --skills` "
+            "for: " + ", ".join(missing) + "."
         )
-    return replace(result, created=tuple(created), actions=tuple(actions))
+    # The permission notice matters once: show it the first time the summary
+    # is read, and remember that it was.
+    notice = _init_choices(storage).get("permission_notice_shown") is not True
+    if notice and shown:
+        _save_init_choice(storage, "permission_notice_shown", True)
+    return replace(
+        result,
+        created=tuple(created),
+        actions=tuple(actions),
+        permission_notice=notice,
+    )
