@@ -229,9 +229,7 @@ syntax.
 
 The YAML frontend mirrors this model: `argv`, `shell`, skill, slash-command,
 MCP, and prompt action keys live directly on global handlers, steps, and
-singular hooks. Only an ordered group uses the `handlers` container. String
-prompts normalize to decision gates attached to the selected action, so a
-positive answer continues into that action rather than becoming unrelated work.
+singular hooks. Only an ordered group uses the `handlers` container.
 
 `AgentDiscovery` resolves actions from `.agents/` plus the selected agent’s
 directory. For an action without an explicit kind, automatic resolution is

@@ -125,7 +125,6 @@ optional lifecycle hooks.
 ```yaml
 handlers:
   - update-yaml-specification: Update specification.md.
-    prompt: Did the YAML syntax change?
   - no-description: ~
 
 workflows:
@@ -452,7 +451,7 @@ workflows:
         agent: custom:coordinator
         model: gpt-5-mini
         reasoning: low
-        prompt: Coordinate the next action locally.
+        description: Coordinate the next action locally.
 ```
 
 ## Manager and worker assignments

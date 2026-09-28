@@ -427,7 +427,6 @@ key and its optional description in the value:
 ```yaml
 handlers:
   - update-yaml-specification: Update specification.md.
-    prompt: Did the YAML syntax change?
   - no-description: ~
 
 workflows:
@@ -598,7 +597,7 @@ A name-only handler references the root catalog; action keys define an inline
 handler. Use `handlers` to apply the same filters to multiple ordered handlers.
 A hook runs a single action, so it cannot reference a root handler that defines
 `loop`, `steps`, or `items`; use such a handler as a workflow step instead.
-Every item has exactly the same shape and may define its own prompt gate:
+Every item has exactly the same shape:
 
 ```yaml
 hooks:
@@ -607,12 +606,10 @@ hooks:
       steps: [develop]
       handlers:
         - name: update-architecture-documentation
-          prompt: Were there architectural changes?
         - name: update-readme
         - name: publish-documentation
           mcp: github
           description: Publish the updated documentation.
-          prompt: Is the documentation ready to publish?
 ```
 
 Grouped and singular hook handlers accept the shorthand too. Hook filters are
