@@ -15,12 +15,12 @@ RUNTIME_INSTRUCTIONS = {
     ),
     "auto": (
         "The manager dispatches each assignment to a worker and handles recovery.",
-        "Reassess the requested worker shape at every assignment boundary. You "
-        "may use one worker for every step, choose a fresh worker per step or "
-        "assignment, or perform the assignment yourself.",
-        "Requested workflow settings take precedence over profile or skill "
-        "preferences. For auto, consider the profile, skill, task, available "
-        "workers, and cost/quality tradeoff.",
+        "You may use one worker for every step, choose a fresh worker per "
+        "step or assignment, or perform the assignment yourself.",
+        "Launch each worker with the model and reasoning the assignment "
+        "requests; they take precedence over profile or skill preferences. "
+        "Where none are shown, launch it with its default settings and do not "
+        "choose them yourself.",
         "If the exact request is unavailable, select the closest worker and "
         "report the difference. Agent hints are advisory and currently unenforced.",
         "The worker submits its own results and associated hook results with "
@@ -48,6 +48,16 @@ RUNTIME_DESCRIPTIONS = {
     ),
 }
 DEFAULT_RUNTIME = "single"
+
+
+def requested_setting(value: object) -> str | None:
+    """A requested model or reasoning, or ``None`` when the workflow asks for none.
+
+    ``auto`` is not shown to agents: an open choice invites them to make one,
+    so an unrequested setting is omitted and the worker keeps its default.
+    """
+    return value if isinstance(value, str) and value != "auto" else None
+
 
 CLI_OWNERSHIP_WARNING = (
     "Strict: only ./ww start, next, and complete operate this flow. Do not mimic "

@@ -5,6 +5,8 @@ import pytest
 
 from ww.config import load_configuration
 from ww.errors import ConfigurationError
+from ww.output import render_plan
+from ww.output_adapters.markdown import MarkdownOutputAdapter
 from ww.plan import compile_workflow_plan
 from ww.project_config import ProjectConfig, load_project_config
 from ww.service import WorkflowService
@@ -247,6 +249,52 @@ workflows:
         "delegate-model",
         "low",
     )
+
+
+def test_unrequested_model_and_reasoning_are_not_shown(tmp_path: Path) -> None:
+    """An open ``auto`` choice invites an agent to make one, so it is omitted."""
+    yaml = """
+workflows:
+  - name: task
+    steps:
+      - work: Work.
+      - review: Review.
+        reasoning: high
+"""
+    plan_text = render_plan(_plan(tmp_path, yaml), json_output=False)
+    assert "`auto`" not in plan_text
+    assert "- Reasoning: `high`" in plan_text
+
+    md = MarkdownOutputAdapter()
+    service = WorkflowService(Storage(tmp_path))
+    preview = md.render_instruction(
+        service.start(
+            "task",
+            "TASK-1",
+            agent="codex",
+            workflow_runtime="auto",
+            caller_role="manager",
+        )
+    )
+    assert "Requested agent: `codex`" in preview
+    assert "Requested model" not in preview
+    assert "Requested reasoning" not in preview
+    assert "--model" not in preview
+    assert "--reasoning" not in preview
+
+    service.next("TASK-1", selected_agent="codex", caller_role="manager")
+    worker = md.render_instruction(service.status("TASK-1", caller_role="worker"))
+    assert "`auto`" not in worker
+    assert "- Model:" not in worker
+
+    service.complete(
+        "TASK-1", artifact="done", caller_role="worker", summary_for_next="Done."
+    )
+    reviewing = md.render_instruction(service.status("TASK-1", caller_role="manager"))
+    assert "Requested reasoning: `high`" in reviewing
+    assert "--reasoning high" in reviewing
+    assert "Requested model" not in reviewing
+    assert "--model" not in reviewing
 
 
 def test_profile_is_inherited_through_enclosing_steps(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ from ww.output_adapters import (
     MarkdownOutputAdapter,
     OutputAdapter,
 )
+from ww.output_adapters.markdown import requested_setting_lines
 from ww.plan import PlanItem, WorkflowPlan
 from ww.results import InitializationResult, ItemUpdateResult, ResetResult, TaskStatus
 
@@ -163,8 +164,9 @@ def render_plan(plan: WorkflowPlan, json_output: bool) -> str:
                 "**Requested execution settings**",
                 "",
                 f"- Agent: `{item.requested_agent or plan.agent}`",
-                f"- Model: `{item.requested_model or 'auto'}`",
-                f"- Reasoning: `{item.requested_reasoning or 'auto'}`",
+                *requested_setting_lines(
+                    item.requested_model, item.requested_reasoning
+                ),
                 "",
             ]
         )

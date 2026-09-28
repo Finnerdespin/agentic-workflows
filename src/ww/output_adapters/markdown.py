@@ -26,6 +26,7 @@ from ww.instructions.policy import Audience, audience
 from ww.output_adapters.base import OutputAdapter
 from ww.output_adapters.terminal import initialization_progress, terminal_accent
 from ww.results import InitializationResult, ResetResult
+from ww.runtimes import requested_setting
 
 Lines = list[str]
 
@@ -335,8 +336,8 @@ def _worker_selection(lines: Lines, instruction: Instruction) -> None:
         and instruction.next_role == "worker"
         and (
             instruction.requested_agent
-            or instruction.requested_model
-            or instruction.requested_reasoning
+            or requested_setting(instruction.requested_model)
+            or requested_setting(instruction.requested_reasoning)
             or instruction.requested_profile
         )
     ):
@@ -345,9 +346,14 @@ def _worker_selection(lines: Lines, instruction: Instruction) -> None:
         [
             "Requested worker:",
             "",
-            f"- Agent: `{instruction.requested_agent or 'auto'}` (advisory)",
-            f"- Model: `{instruction.requested_model or 'auto'}`",
-            f"- Reasoning: `{instruction.requested_reasoning or 'auto'}`",
+            *(
+                [f"- Agent: `{instruction.requested_agent}` (advisory)"]
+                if instruction.requested_agent
+                else []
+            ),
+            *requested_setting_lines(
+                instruction.requested_model, instruction.requested_reasoning
+            ),
             f"- Profile: `{instruction.requested_profile or 'none'}`",
             "",
         ]
@@ -361,9 +367,15 @@ def _worker_selection(lines: Lines, instruction: Instruction) -> None:
             [
                 "Selected worker:",
                 "",
-                f"- Agent: `{instruction.selected_agent or 'unknown'}`",
-                f"- Model: `{instruction.selected_model or 'unknown'}`",
-                f"- Reasoning: `{instruction.selected_reasoning or 'unknown'}`",
+                *(
+                    f"- {label}: `{value}`"
+                    for label, value in (
+                        ("Agent", instruction.selected_agent),
+                        ("Model", instruction.selected_model),
+                        ("Reasoning", instruction.selected_reasoning),
+                    )
+                    if value
+                ),
                 "",
             ]
         )
@@ -381,8 +393,17 @@ def _assignment_preview(lines: Lines, instruction: Instruction) -> None:
                 "",
                 f"Selection item: `{preview['selection_item_name']}`  ",
                 f"Requested agent: `{preview['requested_agent']}`  ",
-                f"Requested model: `{preview['requested_model']}`  ",
-                f"Requested reasoning: `{preview['requested_reasoning']}`  ",
+                *(
+                    f"Requested {label}: `{value}`  "
+                    for label, value in (
+                        ("model", requested_setting(preview["requested_model"])),
+                        (
+                            "reasoning",
+                            requested_setting(preview["requested_reasoning"]),
+                        ),
+                    )
+                    if value is not None
+                ),
                 f"Requested profile: `{preview['requested_profile'] or 'none'}`",
             ]
         )
@@ -1121,8 +1142,8 @@ def _continuation(lines: Lines, instruction: Instruction) -> None:
                 command = next_command(
                     instruction.task_id,
                     selected_agent=str(preview["requested_agent"]),
-                    model=str(preview["requested_model"]),
-                    reasoning=str(preview["requested_reasoning"]),
+                    model=requested_setting(preview["requested_model"]),
+                    reasoning=requested_setting(preview["requested_reasoning"]),
                 )
                 lines.extend(
                     [
@@ -1389,3 +1410,15 @@ def _role_instruction(instruction: Instruction) -> Lines:
                 "the complete response from `ww next` to the selected worker.",
                 "",
             ]
+
+
+def requested_setting_lines(model: str | None, reasoning: str | None) -> list[str]:
+    """Bullet lines for the model and reasoning a step requests, if any."""
+    return [
+        f"- {label}: `{value}`"
+        for label, value in (
+            ("Model", requested_setting(model)),
+            ("Reasoning", requested_setting(reasoning)),
+        )
+        if value is not None
+    ]
