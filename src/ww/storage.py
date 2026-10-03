@@ -9,9 +9,10 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
+from ww.defaults import PROJECT_LAUNCHER_WINDOWS
 from ww.errors import ConfigurationError, StateError
 from ww.locking import FileLocks
-from ww.platform_compat import restrict_to_owner
+from ww.platform_compat import WINDOWS, restrict_to_owner
 from ww.results import NO_WORKFLOWS_ACTION, InitializationResult
 from ww.storage_adapters import (
     FileProjectMetadataStorageAdapter,
@@ -115,11 +116,16 @@ class Storage:
             self.locks.atomic_write(self.project_config_path, project_config)
             created.append("agentic-workflows.json")
 
-        for path, content in (
+        project_files: list[tuple[Path, str]] = [
             (instructions_path, agent_instructions),
             (launcher_path, launcher),
-            *((self.root / relative, content) for relative, content in skills),
-        ):
+        ]
+        if WINDOWS:
+            project_files.append((self.root / "ww.cmd", PROJECT_LAUNCHER_WINDOWS))
+        project_files.extend(
+            (self.root / relative, content) for relative, content in skills
+        )
+        for path, content in project_files:
             relative = path.relative_to(self.root).as_posix()
             if path.exists():
                 preserved.append(relative)

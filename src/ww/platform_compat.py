@@ -129,6 +129,34 @@ def lock_descriptor(descriptor: int, mode: str) -> None:
         raise OSError(code, ctypes.FormatError(code))
 
 
+def configure_console_encoding() -> None:
+    """Make stdout and stderr UTF-8 so ww's own output cannot fail to encode.
+
+    A Windows terminal that is not UTF-8 reports a legacy code page such as
+    cp1252, and ww's output contains characters that code page cannot encode --
+    an em dash, the box-drawing characters in the init banner -- which raises
+    UnicodeEncodeError before the command has done any work. This bites hardest
+    when output is redirected to a file or a pipe, because that path encodes
+    with the locale code page and strict errors, where an interactive console
+    would have rendered the characters directly.
+
+    Errors fall back to replacement rather than raising, so an unencodable
+    character degrades to ``?`` instead of aborting the command. Only Windows is
+    touched: POSIX output is already UTF-8 in practice, and reconfiguring there
+    would change the bytes written to a redirected file.
+    """
+    if not WINDOWS:
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            continue
+
+
 def shell_invocation(script: str, args: Sequence[str]) -> list[str]:
     """The argv that runs ``script`` in a shell, with ``args`` as $1, $2, ...
 

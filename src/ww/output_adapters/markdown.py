@@ -27,6 +27,7 @@ from ww.instructions.commands import (
 from ww.instructions.policy import Audience, audience
 from ww.output_adapters.base import OutputAdapter
 from ww.output_adapters.terminal import initialization_progress, terminal_accent
+from ww.platform_compat import WINDOWS
 from ww.results import NO_WORKFLOWS_ACTION, InitializationResult, ResetResult
 from ww.runtimes import requested_setting
 
@@ -142,7 +143,7 @@ class MarkdownOutputAdapter(OutputAdapter):
                     "  " + terminal_accent("Run commands manually"),
                     "     Use the project launcher for any ww command:",
                     "",
-                    "     ./ww workflows",
+                    *_launcher_examples(),
                     "",
                     *_initialization_shortcut(),
                 ]
@@ -226,6 +227,20 @@ def _permission_notice() -> Lines:
         )
         lines.append("")
     return lines
+
+
+def _launcher_examples() -> Lines:
+    """How to call the project launcher, which depends on the invoking shell.
+
+    ``ww`` is the POSIX launcher and needs a POSIX shell to run; Windows also
+    gets ``ww.cmd`` for cmd.exe and PowerShell.
+    """
+    if WINDOWS:
+        return [
+            "     ww.cmd workflows",
+            "     ./ww workflows   (from Git Bash or MSYS2)",
+        ]
+    return ["     ./ww workflows"]
 
 
 def _initialization_shortcut() -> Lines:

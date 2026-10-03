@@ -33,6 +33,7 @@ from ww.output import (
     render_status,
 )
 from ww.plan import compile_workflow_plan
+from ww.platform_compat import configure_console_encoding
 from ww.service import WorkflowService
 from ww.storage import Storage
 
@@ -497,6 +498,8 @@ _HANDLERS: dict[str, Callable[[_Context], _Outcome]] = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before parsing, because ``--version`` prints and exits from there.
+    configure_console_encoding()
     args = build_parser().parse_args(argv)
     args.invocation_id = str(uuid.uuid4())
     if (

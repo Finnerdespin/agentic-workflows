@@ -25,6 +25,15 @@ cd "$project_root"
 exec ww-agentic-workflows "$@"
 """
 
+# Windows cannot run the POSIX launcher above, but Git for Windows and MSYS2 ship
+# an ``sh`` that can, so it is written on every platform and this one is added
+# beside it for cmd.exe and PowerShell.
+PROJECT_LAUNCHER_WINDOWS = """@echo off
+rem Run ww for this project, whatever directory the caller is in.
+cd /d "%~dp0"
+ww-agentic-workflows %*
+"""
+
 AGENT_INSTRUCTIONS = (
     files("ww.assets").joinpath("agent_instructions.md").read_text(encoding="utf-8")
 )
