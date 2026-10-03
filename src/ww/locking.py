@@ -21,7 +21,7 @@ run, execution state, and plan snapshot from one decoded revision rather than
 combining independently read files. Read-only commands therefore do not wait
 behind a mid-flight writer.
 
-Locks are advisory POSIX locks on sidecar files under ``.ww/locks/``. The
+Locks are whole-file locks on sidecar files under ``.ww/locks/``. The
 kernel releases them when a process exits, so a killed run leaves nothing
 stale. Waiting order is unspecified — no operating system promises FIFO — and
 every wait is bounded by ``WW_LOCK_TIMEOUT`` (seconds, default 30; ``0`` waits
@@ -31,7 +31,6 @@ indefinitely) so a pathological wait fails loudly instead of hanging.
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
 import os
 import sys
@@ -43,6 +42,12 @@ from pathlib import Path
 from typing import TextIO
 
 from ww.errors import LockError
+from ww.platform_compat import (
+    LOCK_EXCLUSIVE,
+    LOCK_SHARED,
+    lock_descriptor,
+    sync_directory,
+)
 
 TIMEOUT_VARIABLE = "WW_LOCK_TIMEOUT"
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -88,7 +93,7 @@ class FileLocks:
             # held: otherwise cleanup can unlink it between open(2) and the
             # shared-lock acquisition, leaving this process locking an orphan
             # inode while a later caller locks the replacement path.
-            _acquire(activity, "ww activity gate", fcntl.LOCK_SH)
+            _acquire(activity, "ww activity gate", LOCK_SHARED)
             with path.open("a+", encoding="utf-8") as handle:
                 _acquire(handle, purpose or self._describe(target))
                 yield
@@ -97,7 +102,7 @@ class FileLocks:
         """Remove unused lock sidecars without racing active or waiting users."""
         self.directory.mkdir(parents=True, exist_ok=True)
         with self._activity_path.open("a+", encoding="utf-8") as activity:
-            _acquire(activity, "ww activity gate", fcntl.LOCK_EX)
+            _acquire(activity, "ww activity gate", LOCK_EXCLUSIVE)
             removed = 0
             for path in self.directory.glob("*.lock"):
                 if path == self._activity_path:
@@ -125,11 +130,7 @@ class FileLocks:
                 handle.flush()
                 os.fsync(handle.fileno())
             temporary.replace(target)
-            directory_descriptor = os.open(target.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
+            sync_directory(target.parent)
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
@@ -145,7 +146,7 @@ class FileLocks:
 
     def _describe(self, target: Path) -> str:
         try:
-            return str(Path(target).relative_to(self.root))
+            return Path(target).relative_to(self.root).as_posix()
         except ValueError:
             return str(target)
 
@@ -176,7 +177,7 @@ def _is_contended_error(error: OSError) -> bool:
     return isinstance(error, BlockingIOError) or error.errno in _CONTENDED_ERRNOS
 
 
-def _acquire(handle: TextIO, description: str, mode: int = fcntl.LOCK_EX) -> None:
+def _acquire(handle: TextIO, description: str, mode: str = LOCK_EXCLUSIVE) -> None:
     limit = timeout_seconds()
     started = time.monotonic()
     deadline = None if limit is None else started + limit
@@ -185,7 +186,7 @@ def _acquire(handle: TextIO, description: str, mode: int = fcntl.LOCK_EX) -> Non
     last_contention_error: OSError | None = None
     while True:
         try:
-            fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
+            lock_descriptor(handle.fileno(), mode)
             return
         except OSError as error:
             if not _is_contended_error(error):

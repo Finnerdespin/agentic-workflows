@@ -163,7 +163,7 @@ class FileTaskStorageAdapter(TaskStorageAdapter):
             "command-output", *address.segments()
         )
         self.locks.atomic_write(path, content)
-        return str(path.relative_to(self.root))
+        return path.relative_to(self.root).as_posix()
 
     def read_command_output(self, reference: str) -> str:
         return self._read_task_file(reference, "command output")
@@ -275,7 +275,7 @@ class FileTaskStorageAdapter(TaskStorageAdapter):
             "steps", *address.segments()
         )
         self.locks.atomic_write(path, content)
-        return str(path.relative_to(self.root))
+        return path.relative_to(self.root).as_posix()
 
     def _run_path(self, task_id: str, run_id: str) -> Path:
         return self.tasks_path / task_id / "runs" / run_id

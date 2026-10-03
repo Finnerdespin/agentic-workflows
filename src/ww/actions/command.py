@@ -10,6 +10,7 @@ from typing import Any
 
 from ww.errors import ConfigurationError, StateError
 from ww.interpolation import dependencies, interpolate
+from ww.platform_compat import shell_invocation
 from ww.validation import (
     expect_bool,
     expect_mapping,
@@ -163,13 +164,10 @@ class CommandAction(AutomaticAction[Commands, Commands]):
                 raise StateError(
                     "saved shell source contains interpolation; use shell args or env"
                 )
-            return [
-                "/bin/sh",
-                "-c",
+            return shell_invocation(
                 command.shell,
-                "ww-command",
-                *(interpolate(argument, values) for argument in command.args),
-            ], environment
+                tuple(interpolate(argument, values) for argument in command.args),
+            ), environment
         return [interpolate(argument, values) for argument in command.argv], environment
 
     def plan(self, definition: Commands, context: ResolutionContext) -> Commands:

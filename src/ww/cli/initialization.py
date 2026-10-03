@@ -565,7 +565,7 @@ def _finish_initialization(
             if not directory.exists():
                 directory.mkdir(parents=True)
                 try:
-                    label = str(directory.relative_to(storage.root))
+                    label = directory.relative_to(storage.root).as_posix()
                 except ValueError:
                     label = str(directory)
                 created.append(label)

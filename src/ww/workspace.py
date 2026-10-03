@@ -16,8 +16,13 @@ from pathlib import Path
 
 
 def relative_workspace(root: Path, path: Path | str) -> str:
-    """The persisted form of a working directory: relative to ``root``."""
-    return os.path.relpath(Path(path).resolve(), root.resolve())
+    """The persisted form of a working directory: relative to ``root``.
+
+    Always POSIX separators, so persisted state reads identically on every
+    platform and a value written on one still resolves on another.
+    """
+    relative = os.path.relpath(Path(path).resolve(), root.resolve())
+    return relative.replace(os.sep, "/")
 
 
 def resolve_workspace(root: Path, value: str | None) -> Path | None:

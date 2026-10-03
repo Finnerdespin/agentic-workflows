@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import os
 import sys
-import termios
-import tty
+
+from ww.platform_compat import SUPPORTS_RAW_TERMINAL, raw_terminal
 
 
 def _ask_choice(prompt: str, choices: tuple[str, ...], default: str) -> str:
@@ -20,7 +20,8 @@ def _ask_choice(prompt: str, choices: tuple[str, ...], default: str) -> str:
 def _interactive_terminal() -> bool:
     """Whether the operator can drive a redrawing prompt."""
     return (
-        sys.stdin.isatty()
+        SUPPORTS_RAW_TERMINAL
+        and sys.stdin.isatty()
         and sys.stdout.isatty()
         and os.environ.get("TERM") not in {None, "", "dumb"}
     )
@@ -40,9 +41,7 @@ def _ask_checklist(
     sys.stdout.write(f"{heading}\n")
     sys.stdout.write("  ↑↓ move · space toggles · a all · enter confirms\n\n")
     _draw(options, checked, cursor, first=True)
-    settings = termios.tcgetattr(sys.stdin.fileno())
-    try:
-        tty.setraw(sys.stdin.fileno())
+    with raw_terminal(sys.stdin.fileno()):
         while True:
             key = sys.stdin.read(1)
             # An arrow key arrives as an escape sequence; read its tail.
@@ -52,8 +51,6 @@ def _ask_checklist(
             if done:
                 break
             _draw(options, checked, cursor)
-    finally:
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, settings)
     sys.stdout.write("\n")
     sys.stdout.flush()
     return tuple(

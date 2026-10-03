@@ -11,6 +11,7 @@ from typing import Any
 
 from ww.errors import ConfigurationError, StateError
 from ww.locking import FileLocks
+from ww.platform_compat import restrict_to_owner
 from ww.results import NO_WORKFLOWS_ACTION, InitializationResult
 from ww.storage_adapters import (
     FileProjectMetadataStorageAdapter,
@@ -119,7 +120,7 @@ class Storage:
             (launcher_path, launcher),
             *((self.root / relative, content) for relative, content in skills),
         ):
-            relative = str(path.relative_to(self.root))
+            relative = path.relative_to(self.root).as_posix()
             if path.exists():
                 preserved.append(relative)
                 continue
@@ -260,7 +261,7 @@ class Storage:
             # Existing logs might have been created by an older release with
             # the user's umask. Repair them on every append as part of the
             # audit log's confidentiality contract.
-            os.fchmod(descriptor, 0o600)
+            restrict_to_owner(descriptor, path)
             with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
                 handle.write(line)
                 handle.flush()
