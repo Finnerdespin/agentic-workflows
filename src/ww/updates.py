@@ -94,7 +94,7 @@ class UpdateNotice:
             "continue**, and let them decide whether to update. To update:",
             "",
             "```console",
-            f"git -C {self.checkout} pull",
+            f"git -C {self.checkout.as_posix()} pull",
             "```",
             "",
             "This notice is shown once. `ww updates` prints it again.",

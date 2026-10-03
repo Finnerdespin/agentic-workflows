@@ -181,7 +181,7 @@ def test_status_does_not_wait_for_a_writer_that_is_mid_command(tmp_path: Path) -
         """handlers:
   - name: slow
     command:
-      argv: [sleep, "1.0"]
+      argv: [sleep, "3.0"]
 workflows:
   - name: task
     steps:
@@ -207,6 +207,13 @@ workflows:
     ).returncode == 0
     assert (_run(tmp_path, "next", "TASK-5")).returncode == 0
 
+    # Interpreter startup dominates this command and differs by platform, so the
+    # budget below is relative to an uncontended run of the same command rather
+    # than a fixed number of seconds.
+    baseline_started = time.monotonic()
+    assert (_run(tmp_path, "status", "TASK-5")).returncode == 0
+    baseline = time.monotonic() - baseline_started
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         writer = pool.submit(
             _run,
@@ -226,7 +233,8 @@ workflows:
         writer_result = writer.result()
 
     # Reads are deliberately unlocked, so status answers while the writer is
-    # still running its handler instead of queueing behind it.
+    # still running its handler instead of queueing behind it. Blocking would
+    # add the handler's three seconds; slack absorbs scheduling noise.
     assert reader_result.returncode == 0, reader_result.stderr
-    assert elapsed < 0.7
+    assert elapsed < baseline + 1.5
     assert writer_result.returncode == 0, writer_result.stderr

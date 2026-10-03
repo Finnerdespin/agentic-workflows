@@ -556,7 +556,9 @@ class InstructionBuilder:
             ),
             previous_step=previous.step if previous else None,
             previous_step_artifact=(
-                str((self.root / previous.artifact).resolve()) if previous else None
+                (self.root / previous.artifact).resolve().as_posix()
+                if previous
+                else None
             ),
             previous_step_summary=previous.summary if previous else None,
             summary_required=item.hands_over,

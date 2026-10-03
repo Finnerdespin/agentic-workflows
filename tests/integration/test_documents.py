@@ -65,7 +65,7 @@ def test_documents_resolve_to_task_and_project_files(tmp_path: Path) -> None:
         ("test_cases", "task", False),
         ("conventions", "project", False),
     ]
-    assert listing[1]["path"] == str(project_file)
+    assert listing[1]["path"] == project_file.as_posix()
     # Without a task, only project documents can be located.
     assert [entry["name"] for entry in service.documents_listing(None)] == [
         "conventions"

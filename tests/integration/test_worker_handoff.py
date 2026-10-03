@@ -579,9 +579,9 @@ workflows:
     plan = service.next("TASK-1")
     assert plan.item_name == "plan"
     assert plan.previous_step == "research"
-    assert plan.previous_step_artifact == str(
+    assert plan.previous_step_artifact == (
         tmp_path / ".ww/tasks/TASK-1/runs/01-task/steps/02-research.md"
-    )
+    ).as_posix()
     rendered = MarkdownOutputAdapter().render_instruction(plan)
     assert "### Previous step result" in rendered
     assert "The `research` step left this summary for you:" in rendered

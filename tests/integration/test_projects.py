@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pytest
 from tests.workflow_helpers import start_after_init
 from ww.cli import main
 from ww.errors import ConfigurationError, StateError
+from ww.platform_compat import WINDOWS
 from ww.service import WorkflowService
 from ww.storage import Storage
 
@@ -72,6 +74,27 @@ def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ("git", *args), cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+_MSYS_PATH = re.compile(r"/([A-Za-z])/(.*)")
+
+
+def _as_native(reported: str) -> str:
+    """Compare a path the shell printed against a native ``Path``.
+
+    The ``pwd`` step above runs in whichever shell the platform provides. Git
+    for Windows and MSYS2 report ``/c/Users/...`` where Windows spells the same
+    directory ``C:\\Users\\...``, so the comparison needs translating. ww itself
+    must not do this: the text is the command's own output, and rewriting it
+    would corrupt output that legitimately contains a slash-prefixed path.
+    """
+    if not WINDOWS:
+        return reported
+    match = _MSYS_PATH.fullmatch(reported)
+    if match is None:
+        return reported
+    drive, rest = match.groups()
+    return drive.upper() + ":\\" + rest.replace("/", "\\")
 
 
 def _stdout(service: WorkflowService, task_id: str) -> str:
@@ -156,7 +179,7 @@ def test_a_task_started_in_a_project_works_there(tmp_path: Path) -> None:
     service.complete("T1", artifact="done", summary_for_next="Done.")
 
     assert develop.working_directory == str((root / "backend").resolve())
-    assert _stdout(service, "T1") == str((root / "backend").resolve())
+    assert _as_native(_stdout(service, "T1")) == str((root / "backend").resolve())
     state = service.tasks.read_execution_state("T1", "01-feature")
     assert state is not None
     assert dict(state.workflow_values)["__project"] == "backend"
@@ -171,7 +194,7 @@ def test_a_task_without_a_project_still_works_in_the_root(tmp_path: Path) -> Non
     service.next("T1")
     service.complete("T1", artifact="done", summary_for_next="Done.")
 
-    assert _stdout(service, "T1") == str(root.resolve())
+    assert _as_native(_stdout(service, "T1")) == str(root.resolve())
 
 
 def test_unknown_or_missing_project_directories_are_rejected(tmp_path: Path) -> None:
@@ -252,7 +275,7 @@ def test_children_run_in_their_own_project(
     assert api.working_directory == "backend"
     service.next("P/api")
     service.complete("P/api", artifact="done", summary_for_next="Done.")
-    assert _stdout(service, "P/api") == str((root / "backend").resolve())
+    assert _as_native(_stdout(service, "P/api")) == str((root / "backend").resolve())
     service.next("P/api")
     service.complete(
         "P/api",

@@ -310,7 +310,9 @@ def test_the_operator_page_is_an_answer_sheet_that_ww_applies(
 ) -> None:
     port = _free_port()
     monkeypatch.setenv("WW_OPERATOR_PORT", str(port))
-    monkeypatch.setattr(server, "_OPEN_BROWSER_AFTER", 0.3)
+    # ``_OPEN_BROWSER_AFTER`` is left at its default: the waiter below waits for
+    # a tab that is already polling, so the window only has to be long enough
+    # for that tab to arrive, and the wait ends as soon as it does.
     (tmp_path / "workflows.yaml").write_text(MANUAL_TESTS, encoding="utf-8")
     service = WorkflowService(Storage(tmp_path))
     md = MarkdownOutputAdapter()

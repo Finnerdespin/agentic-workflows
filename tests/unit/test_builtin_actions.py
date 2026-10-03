@@ -28,6 +28,7 @@ from ww.actions.contracts import CommandOutcome, CommandRequest
 from ww.discovery import AvailableActions
 from ww.errors import ConfigurationError, StateError
 from ww.extensions import ExtensionCheckResult, ExtensionHandler, ExtensionResult
+from ww.platform_compat import shell_invocation
 from ww.workflow_config import ProvidedVariable
 
 
@@ -430,7 +431,7 @@ def test_command_render_substitutes_runtime_values() -> None:
         {"x": "1"},
     )
 
-    assert argv == ["/bin/sh", "-c", 'echo "$1"', "ww-command", "1"]
+    assert argv == shell_invocation('echo "$1"', ("1",))
     assert environment == {"A": "1"}
     with pytest.raises(StateError, match="missing variable\\(s\\): x"):
         action.render_command(CommandDefinition(argv=("{{x}}",)), {})

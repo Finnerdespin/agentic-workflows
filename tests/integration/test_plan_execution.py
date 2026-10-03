@@ -122,7 +122,7 @@ def test_execution_snapshot_automatic_input_nested_state_and_artifacts(
     assert (tmp_path / "committed.txt").read_text() == "Implement feature"
     assert (
         tmp_path / ".ww/tasks/TASK-1/runs/01-task/steps/02-group/02-fix.md"
-    ).read_text() == (
+    ).read_text(encoding="utf-8") == (
         "# TASK-1 — group/fix\n\n"
         "## Workflow context\n\n"
         "- Workflow: task\n"
@@ -202,7 +202,7 @@ def test_handoff_starts_the_target_as_its_own_run(tmp_path: Path) -> None:
     assert target is not None and target.plan.workflow == "task"
     assert (
         tmp_path / ".ww/tasks/TASK-2/runs/01-choose/steps/02-select.md"
-    ).read_text() == (
+    ).read_text(encoding="utf-8") == (
         "# TASK-2 — select\n\n"
         "## Workflow context\n\n"
         "- Workflow: choose\n"
@@ -316,7 +316,7 @@ def test_handoff_target_run_continues_normally(tmp_path: Path) -> None:
     assert ready.item_name == "fix"
     assert (
         tmp_path / ".ww/tasks/TASK-3/runs/02-task/steps/01-init.md"
-    ).read_text() == (
+    ).read_text(encoding="utf-8") == (
         "# TASK-3 — init\n\n"
         "## Workflow context\n\n"
         "- Workflow: task\n"

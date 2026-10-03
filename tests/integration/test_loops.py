@@ -104,7 +104,7 @@ def test_loop_repeats_automatically_until_worker_stops(tmp_path: Path) -> None:
     artifacts = service.artifacts("TASK-LOOP")
     assert {
         "step": "review-and-fix",
-        "artifact": str(wrapper_artifact.relative_to(tmp_path)),
+        "artifact": wrapper_artifact.relative_to(tmp_path).as_posix(),
         "path": str(wrapper_artifact),
     } in artifacts
 

@@ -156,7 +156,7 @@ class DocumentStore:
                     "name": document.name,
                     "description": document.description,
                     "scope": document.scope,
-                    "path": str(self.path(document, task_id, workspace)),
+                    "path": self.path(document, task_id, workspace).as_posix(),
                     "exists": self.exists(document, task_id, workspace),
                     "last_update": last.to_dict() if last else None,
                 }
