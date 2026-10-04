@@ -119,6 +119,24 @@ Editable installation keeps the command connected to that checkout; after a
 reinstall. This is deliberate for now — see
 [Releases and branches](#releases-and-branches).
 
+On Windows, clone [this fork](https://github.com/Finnerdespin/agentic-workflows)
+instead of upstream, and a virtual environment is the simpler choice — pipx
+works, but a plain `venv` puts `ww-agentic-workflows` on `PATH` for as long as
+it is active:
+
+```powershell
+mkdir C:\tools -Force
+git clone https://github.com/Finnerdespin/agentic-workflows.git C:\tools\agentic-workflows
+cd C:\tools\agentic-workflows
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install --editable .
+ww-agentic-workflows --version
+```
+
+Activate that environment in every new terminal before running ww. See
+[Windows](#windows) for the second thing to set up.
+
 ### 2. Initialize your project
 
 Run `init` from the root of the project you want to run workflows in:
@@ -389,9 +407,69 @@ alongside the execution model and the workflow shapes ww does not support.
 ## Supported platforms
 
 ww supports Python 3.10 and newer on POSIX systems, including current Linux
-and macOS releases. Its filesystem locking uses POSIX `fcntl`; native Windows
-is not supported. Windows users can run ww in a POSIX-compatible environment
-such as WSL.
+and macOS releases, and on native Windows.
+
+Upstream supports POSIX only. Native Windows is supported in this fork's
+`windows-support` branch, and `main` here tracks that branch; see
+[Windows](#windows) for what works, what does not, and the two things to set
+up first.
+
+## Windows
+
+Native Windows runs on `windows-support`, mirrored onto `main`. Upstream
+supports POSIX only, so this is an unsupported port: it is tested on Windows 11
+with Python 3.12 and expects Git for Windows to be installed.
+
+Two things to set up before the first run.
+
+**Put a POSIX shell on `PATH`.** Workflow `shell` steps are written in POSIX
+syntax. ww uses `sh` if it finds one, and falls back to `cmd.exe` otherwise.
+The fallback runs simple commands, but `cmd.exe` has no `test`, its quoting
+differs, and `&&`/`||` chains behave differently, so a step can print a wrong
+answer and still exit zero. ww warns on stderr when this happens. To fix it,
+add Git's `usr\bin` to `PATH`, once per shell:
+
+```powershell
+$env:PATH += ";C:\Program Files\Git\usr\bin"
+```
+
+**Choose a launcher.** `init` writes three; which one to call depends on your
+shell.
+
+| Launcher | Shell | Notes |
+| --- | --- | --- |
+| `./ww` | Git Bash, MSYS2, WSL | The POSIX launcher, as upstream |
+| `.\ww.ps1` | PowerShell | Carries values spanning lines; needs the execution policy below |
+| `ww.cmd` | `cmd.exe` | Single-line values only, see below |
+
+In PowerShell, a value spanning lines — a multi-line `--artifact`, or any
+`--variable` containing a newline — cannot pass through `ww.cmd`. `cmd.exe`
+ends a command at a line break before it applies any quoting, so the value
+arrives as two commands and the step fails with a message about a missing
+`--summary-for-next-step` rather than about the real cause. Use `.\ww.ps1`.
+
+An execution policy of `Restricted`, which is what every scope reading
+`Undefined` resolves to, refuses `ww.ps1` outright. Check and, for the current
+shell only, allow it:
+
+```powershell
+Get-ExecutionPolicy -List
+Set-ExecutionPolicy -Scope Process Bypass
+```
+
+Under any policy, calling the installed `ww-agentic-workflows` directly works
+and keeps multi-line values intact. That is the fallback when `ww.ps1` will not
+run.
+
+`init` preserves existing files, so a project initialized before these
+launchers existed does not receive them. Delete `ww.cmd` and `ww.ps1` and run
+`init` again to refresh.
+
+Filesystem locking uses `LockFileEx` on Windows instead of POSIX `fcntl`, and
+`icacls` restricts `.ww/` to the current user. `tests/unit/test_locking.py`
+still imports `fcntl` and is skipped on Windows; the locking paths are covered
+by a separate probe. Windows paths are stored with `/` separators so workflow
+`artifact` paths match what the agent is told, and are still resolved natively.
 
 Task state and saved plans are private runtime data, not a general-purpose
 interchange format; do not edit them by hand. Extension authors should use
