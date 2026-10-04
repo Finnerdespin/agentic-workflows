@@ -274,7 +274,9 @@ class InstructionBuilder:
         )
         input_context = tuple(
             StepHandover(
-                found.step, str((self.root / found.artifact).resolve()), found.summary
+                found.step,
+                (self.root / found.artifact).resolve().as_posix(),
+                found.summary,
             )
             for found in self._handovers(state, plan)
             if found.completed_at > last_run
@@ -591,7 +593,7 @@ class InstructionBuilder:
                 tuple(
                     StepHandover(
                         found.step,
-                        str((self.root / found.artifact).resolve()),
+                        (self.root / found.artifact).resolve().as_posix(),
                         found.summary,
                     )
                     for found in self._handovers(state, plan)

@@ -157,21 +157,42 @@ def configure_console_encoding() -> None:
             continue
 
 
+_POSIX_SHELL_WARNING = (
+    "ww: no POSIX shell on PATH, so this shell step ran under cmd.exe.\n"
+    "ww: Workflows are written in POSIX shell syntax, which cmd.exe does not\n"
+    "ww: understand. Quoting, redirection and && chains will not behave, and\n"
+    "ww: a command that should have failed can appear to succeed. Install Git\n"
+    "ww: for Windows or MSYS2, which put sh on PATH."
+)
+
+_warned_missing_shell = False
+
+
 def shell_invocation(script: str, args: Sequence[str]) -> list[str]:
     """The argv that runs ``script`` in a shell, with ``args`` as $1, $2, ...
 
     POSIX uses ``/bin/sh``. Windows has no ``/bin/sh``, and workflows are
     written in POSIX shell syntax, so a POSIX shell found on PATH -- Git for
     Windows or MSYS2, both common on a developer machine -- is used in
-    preference to cmd.exe. Without one, cmd.exe runs the script instead: simple
-    commands behave the same, but POSIX quoting, redirection and ``&&`` chains
-    do not, and ``args`` cannot be passed as positional parameters.
+    preference to cmd.exe.
+
+    Without one, cmd.exe runs the script. That is only safe for simple
+    commands: it cannot pass ``args`` as positional parameters, and it reads
+    POSIX syntax as something else. The failure is not reliably visible,
+    because a step like ``test -s build && echo ok || echo empty`` runs ``test``
+    as an unknown command, takes the ``||`` branch, and still exits zero. So the
+    fallback warns once per process rather than pretending the step ran as
+    written.
     """
+    global _warned_missing_shell
     if not WINDOWS:
         return ["/bin/sh", "-c", script, "ww-command", *args]
     posix = shutil.which("sh")
     if posix is not None:
         return [posix, "-c", script, "ww-command", *args]
+    if not _warned_missing_shell:
+        _warned_missing_shell = True
+        print(_POSIX_SHELL_WARNING, file=sys.stderr)
     return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", script, *args]
 
 
