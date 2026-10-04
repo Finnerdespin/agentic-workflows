@@ -9,7 +9,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
-from ww.defaults import PROJECT_LAUNCHER_WINDOWS
+from ww.defaults import PROJECT_LAUNCHER_POWERSHELL, PROJECT_LAUNCHER_WINDOWS
 from ww.errors import ConfigurationError, StateError
 from ww.locking import FileLocks
 from ww.platform_compat import WINDOWS, restrict_to_owner
@@ -122,6 +122,7 @@ class Storage:
         ]
         if WINDOWS:
             project_files.append((self.root / "ww.cmd", PROJECT_LAUNCHER_WINDOWS))
+            project_files.append((self.root / "ww.ps1", PROJECT_LAUNCHER_POWERSHELL))
         project_files.extend(
             (self.root / relative, content) for relative, content in skills
         )

@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from ww.cli import build_parser, main
+from ww.defaults import PROJECT_LAUNCHER_POWERSHELL
+from ww.platform_compat import WINDOWS
 from ww.storage import Storage
 from ww.variables import BRANCH_NAMING_STRATEGY
 
@@ -671,6 +673,38 @@ def test_init_is_additive_and_restores_missing_files(tmp_path: Path, capsys) -> 
     assert (tmp_path / "workflows.yaml").read_text(encoding="utf-8") == original
     assert "Already present and preserved:" in output
     assert "ww" in output
+
+
+def test_init_writes_one_launcher_per_windows_shell(tmp_path: Path) -> None:
+    assert main(["--root", str(tmp_path), "init", "--no-input"]) == 0
+
+    if not WINDOWS:
+        assert not (tmp_path / "ww.cmd").exists()
+        assert not (tmp_path / "ww.ps1").exists()
+        return
+
+    cmd = (tmp_path / "ww.cmd").read_text(encoding="utf-8")
+    assert "where ww-agentic-workflows" in cmd
+    assert "ww-agentic-workflows %*" in cmd
+    ps1 = (tmp_path / "ww.ps1").read_text(encoding="utf-8")
+    assert ps1 == PROJECT_LAUNCHER_POWERSHELL
+    assert "$PSScriptRoot" in ps1
+    assert "ww-agentic-workflows @args" in ps1
+
+
+def test_the_powershell_launcher_never_starts_a_line_with_an_operator() -> None:
+    """PowerShell 5.1 continues a line only when the operator ends it.
+
+    An operator opening the next line is a parse error there, so a launcher
+    written that way is refused by every PowerShell 5.1 user, which includes
+    the Windows 10 and 11 defaults.
+    """
+    leading = [
+        line
+        for line in PROJECT_LAUNCHER_POWERSHELL.splitlines()
+        if line.strip().startswith(("+ ", "- ", "| ", "* "))
+    ]
+    assert not leading, leading
 
 
 def test_init_enables_git_with_safe_defaults(tmp_path: Path, capsys) -> None:

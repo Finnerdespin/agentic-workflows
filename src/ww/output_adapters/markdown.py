@@ -232,13 +232,20 @@ def _permission_notice() -> Lines:
 def _launcher_examples() -> Lines:
     """How to call the project launcher, which depends on the invoking shell.
 
-    ``ww`` is the POSIX launcher and needs a POSIX shell to run; Windows also
-    gets ``ww.cmd`` for cmd.exe and PowerShell.
+    ``ww`` is the POSIX launcher and needs a POSIX shell to run. Windows adds
+    ``ww.ps1`` for PowerShell and ``ww.cmd`` for cmd.exe, in that order
+    because cmd.exe ends a command at a line break and so cannot carry an
+    argument spanning lines.
     """
     if WINDOWS:
         return [
-            "     ww.cmd workflows",
-            "     ./ww workflows   (from Git Bash or MSYS2)",
+            "     .\\ww.ps1 workflows   (PowerShell; use this for multi-line values)",
+            "     ww.cmd workflows     (cmd.exe; single-line values only)",
+            "     ./ww workflows       (from Git Bash or MSYS2)",
+            "",
+            "     A PowerShell whose execution policy blocks ww.ps1 can run"
+            " ww-agentic-workflows directly instead; that also keeps"
+            " multi-line values intact.",
         ]
     return ["     ./ww workflows"]
 
